@@ -44,10 +44,10 @@ const char *powerStateToPayload(byte data1) {
 #define EV_SWITCH       0x0C
 #define EV_TURNOUT_CMD  0x10
 
-// Internal: print full turnout payload (event, from, to, d0-d6, cr).
-static void debugTurnoutPayload(Print &out, byte event, uint16_t from_node, uint16_t to_node,
+// Internal: print full operation payload (event, from, to, d0-d6, cr) for any event type.
+static void debugOperationPayload(Print &out, byte event, uint16_t from_node, uint16_t to_node,
   byte d0, byte d1, byte d2, byte d3, byte d4, byte d5, byte d6, byte cr) {
-  out.print(F("DBG TURNOUT event="));
+  out.print(F("DBG event="));
   out.print((int)event);
   out.print(F(" from="));
   out.print(from_node);
@@ -84,8 +84,8 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
   byte data1 = pkt->data1;
   byte data2 = pkt->data2;
 
-  if (debug && (event == EV_TURNOUT || event == EV_TURNOUT_CMD)) {
-    debugTurnoutPayload(out, event, node, pkt->to_node, uid, data1, data2,
+  if (debug && (event == EV_TURNOUT || event == EV_TURNOUT_CMD || event == EV_BUTTON || event == EV_SWITCH)) {
+    debugOperationPayload(out, event, node, pkt->to_node, uid, data1, data2,
       pkt->data3, pkt->data4, pkt->data5, pkt->data6, pkt->cmd_response);
   }
 
