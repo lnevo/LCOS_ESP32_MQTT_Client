@@ -111,6 +111,14 @@ void handleOperationsEvents(DATAGRAM *pkt){
       mqttPublishOperationEvent(Serial, pkt->event, pkt->source_node, pkt->data0, pkt->data1, pkt->data2);
       break;
     case 2: // turnout status event
+      Serial.print(F("DBG TURNOUT event=2 from="));
+      Serial.print(pkt->source_node);
+      Serial.print(F(" uid="));
+      Serial.print((int)pkt->data0);
+      Serial.print(F(" d1="));
+      Serial.print((int)pkt->data1);
+      Serial.print(F(" d2="));
+      Serial.println((int)pkt->data2);
       mqttPublishOperationEvent(Serial, pkt->event, pkt->source_node, pkt->data0, pkt->data1, pkt->data2);
       break;
     case 3: // signal status event
@@ -153,6 +161,14 @@ void handleOperationsEvents(DATAGRAM *pkt){
       mqttPublishOperationEvent(Serial, pkt->event, pkt->source_node, pkt->data0, pkt->data1, pkt->data2);
       break;
     case 16: // turnout command
+      Serial.print(F("DBG TURNOUT event=16 from="));
+      Serial.print(pkt->source_node);
+      Serial.print(F(" uid="));
+      Serial.print((int)pkt->data0);
+      Serial.print(F(" d1="));
+      Serial.print((int)pkt->data1);
+      Serial.print(F(" d2="));
+      Serial.println((int)pkt->data2);
       mqttPublishOperationEvent(Serial, pkt->event, pkt->source_node, pkt->data0, pkt->data1, pkt->data2);
       break; 
     case 17: // signal command
