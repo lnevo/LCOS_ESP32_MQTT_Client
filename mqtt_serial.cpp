@@ -52,8 +52,8 @@ void mqttPublishOperationEvent(Print &out, byte event, uint16_t node, byte uid, 
     case EV_TURNOUT:
     case EV_TURNOUT_CMD:
       prefix = MQTT_TOPIC_TURNOUT;
-      /* Try data2 for state; if node always sends data1=0, position may be in data2 */
-      payload = turnoutStateToPayload(data2);
+      /* Node uses data2: 0 = thrown, non-zero = closed (invert for JMRI 0=CLOSED 1=THROWN) */
+      payload = turnoutStateToPayload(data2 == 0 ? 1 : 0);
       break;
     case EV_BUTTON:
     case EV_SWITCH:
