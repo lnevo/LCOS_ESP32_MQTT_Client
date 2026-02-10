@@ -10,6 +10,7 @@
 #define MQTT_SERIAL_H
 
 #include <Arduino.h>
+struct DATAGRAM;  // forward decl; include lcos.h in .cpp
 
 // JMRI receive topic prefixes (append packed address via mqttTopicWithPackedAddress)
 #define MQTT_TOPIC_TURNOUT   "track/turnout/"
@@ -50,10 +51,12 @@ const char *powerStateToPayload(byte data1);
 // --- One-call wrappers: build topic (packed address), choose payload, publish ---
 
 /**
- * Publish one MQTT line for an operations event. Uses node+uid packed address and
- * event type to pick topic prefix and payload. No-op for event types that don't map to MQTT.
- * State from data1 (LCOS sendShortMessage/broadcastOpState put primary value in data1); data2 passed for future use.
+ * Publish one MQTT line for an operations event. Pass the full LCOS packet; we use
+ * event, source_node, data0 (uid), data1, data2. No-op for event types that don't map to MQTT.
+ * Two-arg overload: no debug. Three-arg overload: when debug is true and event is turnout (2/16),
+ * prints full payload (from, to, d0-d6, cr).
  */
-void mqttPublishOperationEvent(Print &out, byte event, uint16_t node, byte uid, byte data1, byte data2);
+void mqttPublishOperationEvent(Print &out, const struct DATAGRAM *pkt);
+void mqttPublishOperationEvent(Print &out, const struct DATAGRAM *pkt, bool debug);
 
 #endif // MQTT_SERIAL_H

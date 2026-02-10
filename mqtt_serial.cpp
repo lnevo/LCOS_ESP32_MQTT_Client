@@ -5,6 +5,7 @@
  */
 
 #include "mqtt_serial.h"
+#include "lcos/lcos.h"
 #include <stdio.h>
 
 void mqttPublish(Print &out, const char *topic, const char *payload) {
@@ -43,7 +44,51 @@ const char *powerStateToPayload(byte data1) {
 #define EV_SWITCH       0x0C
 #define EV_TURNOUT_CMD  0x10
 
-void mqttPublishOperationEvent(Print &out, byte event, uint16_t node, byte uid, byte data1, byte data2) {
+// Internal: print full turnout payload (event, from, to, d0-d6, cr).
+static void debugTurnoutPayload(Print &out, byte event, uint16_t from_node, uint16_t to_node,
+  byte d0, byte d1, byte d2, byte d3, byte d4, byte d5, byte d6, byte cr) {
+  out.print(F("DBG TURNOUT event="));
+  out.print((int)event);
+  out.print(F(" from="));
+  out.print(from_node);
+  out.print(F(" to="));
+  out.print(to_node);
+  out.print(F(" d0="));
+  out.print((int)d0);
+  out.print(F(" d1="));
+  out.print((int)d1);
+  out.print(F(" d2="));
+  out.print((int)d2);
+  out.print(F(" d3="));
+  out.print((int)d3);
+  out.print(F(" d4="));
+  out.print((int)d4);
+  out.print(F(" d5="));
+  out.print((int)d5);
+  out.print(F(" d6="));
+  out.print((int)d6);
+  out.print(F(" cr="));
+  out.println((int)cr);
+}
+
+void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt) {
+  mqttPublishOperationEvent(out, pkt, false);
+}
+
+void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
+  if (pkt == nullptr) return;
+
+  byte event = pkt->event;
+  uint16_t node = pkt->source_node;
+  byte uid = pkt->data0;
+  byte data1 = pkt->data1;
+  byte data2 = pkt->data2;
+
+  if (debug && (event == EV_TURNOUT || event == EV_TURNOUT_CMD)) {
+    debugTurnoutPayload(out, event, node, pkt->to_node, uid, data1, data2,
+      pkt->data3, pkt->data4, pkt->data5, pkt->data6, pkt->cmd_response);
+  }
+
   char topic[32];
   const char *payload = nullptr;
   const char *prefix = nullptr;
