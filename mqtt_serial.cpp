@@ -25,7 +25,8 @@ char *mqttTopicWithPackedAddress(char *buf, size_t bufSize, const char *prefix, 
 }
 
 const char *turnoutStateToPayload(byte data1) {
-  return data1 == 0 ? "CLOSED" : "THROWN";
+  /* LCOS: 0 = thrown, 1 = closed (normal). JMRI: CLOSED / THROWN */
+  return data1 == 0 ? "THROWN" : "CLOSED";
 }
 
 const char *sensorStateToPayload(byte data1) {
