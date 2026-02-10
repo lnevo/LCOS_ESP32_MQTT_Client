@@ -1,0 +1,320 @@
+TODO: LCOS to JMRI MQTT Bridge Implementation
+==================================================
+
+PROJECT GOAL
+-----------
+Bridge messages from the LCOS network to JMRI by outputting MQTT-style messages 
+to the serial port. A program monitoring the serial port will relay these messages 
+to an MQTT server, which JMRI can then consume.
+
+IMPLEMENTATION APPROACH
+-----------------------
+- Add serial output directly in the switch/case statements within event handlers
+- Do NOT use the gateway functions (sendToGateways, sendToSerialGateway, etc.)
+- Output MQTT topic/content format messages to Serial port
+- As much as possible, additional code should be in a separate file/header file
+
+SERIAL OUTPUT PROTOCOL (MQTT publish over serial)
+-------------------------------------------------
+This section defines the serial output protocol used to publish MQTT messages.
+All serial output from this bridge MUST strictly follow this format.
+
+Protocol rules:
+- Output is plain text.
+- Each line represents exactly ONE MQTT publish.
+- Line format is:
+
+  <topic><space><payload>\n
+
+- The FIRST space separates topic and payload.
+- Topic MUST be a valid MQTT topic string.
+- Payload is the remainder of the line (may contain spaces).
+- Lines are newline-terminated (LF). Do not include CR.
+
+Retention behavior:
+- The publishing side will publish all messages as RETAINED.
+- Therefore, sending a new line for the same topic replaces the retained value.
+
+JMRI compatibility:
+- Topics must match the JMRI MQTT "receive" topics exactly.
+- Payload strings must be EXACT JMRI-expected values:
+  - Turnout: "THROWN" or "CLOSED"
+  - Sensor: "ACTIVE" or "INACTIVE"
+  - Light: "ON", "OFF", or "INTENSITY <0.00–1.00>"
+  - Signal Mast: "<Aspect>; <Lit|Unlit>; <Held|Unheld>"
+
+Examples:
+- sensors/room1/temp 21.4
+- jmri/recv/turnout/LT12 THROWN
+- jmri/recv/sensor/IR3 ACTIVE
+- jmri/recv/light/Yard ON
+- jmri/recv/signalMast/SM1 Clear; Lit; Unheld
+
+Notes:
+- Do NOT include topic inside the payload.
+- Do NOT emit JSON.
+- Do NOT emit multiple values per line.
+- Do NOT rely on ordering; each line must be independently valid.
+
+Ensure all serial output strictly follows this format.
+
+CURRENT CODE STRUCTURE
+----------------------
+Location: LCOS_ESP32_MQTT_Client.ino
+
+Event Handlers:
+1. handleOperationsEvents(DATAGRAM *pkt) - Lines 102-171
+   - Switch on pkt->event (cases 1-23)
+   - Cases include: node status, turnout, signal, block, crossing, power, mpo, 
+     button, switch contact, and various commands
+
+2. handleGetSet(DATAGRAM *pkt) - Lines 173-272
+   - Configuration events (cases 1, 2, 22, 33, 46, 47, 77, 79)
+
+3. handleSystemEvents(DATAGRAM *pkt) - In lcos.cpp
+   - System events (cases 1-15)
+
+DATAGRAM Structure
+------------------
+struct DATAGRAM {
+  bool broadcast;
+  uint16_t from_node;
+  uint16_t source_node;
+  uint16_t to_node;
+  byte event_type;
+  byte event;
+  byte data0;  // Typically UID (object identifier)
+  byte data1;  // Primary state/value
+  byte data2;  // Secondary value
+  byte data3;  // Additional data
+  byte data4;  // Additional data
+  byte data5;  // Additional data
+  byte data6;  // Additional data
+  byte cmd_response;
+};
+
+JMRI MQTT PROTOCOL REQUIREMENTS
+-------------------------------
+See "SERIAL OUTPUT PROTOCOL" above for the definitive line format and rules.
+
+JMRI Default Topic Formats (from actual app settings):
+- Turnout send/receive: track/turnout/{0}
+- Sensor send/receive: track/sensor/{0}
+- Light send/receive: track/light/{0}
+- Reporter: track/reporter/{0}
+- Signal Head: track/signalhead/{0}
+- Signal Mast: track/signalmast/{0}
+- Throttle send/receive: cab/{0}/throttle
+- Direction send/receive: cab/{0}/direction
+- Function send/receive: cab/{0}/function/{1}
+- Consist send: cab/{0}/consist
+- Power send/receive: track/power
+
+Note: {0} = object system name suffix (UID from pkt->data0)
+      {1} = function number (for function topics)
+
+JMRI Message Content Values
+---------------------------
+Turnouts:
+  - "CLOSED" (state 0)
+  - "THROWN" (state 1)
+  - "INCONSISTENT" (optional)
+  - "UNKNOWN" (optional)
+
+Sensors:
+  - "ACTIVE" (state 1)
+  - "INACTIVE" (state 0)
+
+Power:
+  - "ON" (state 1)
+  - "OFF" (state 0)
+
+Lights:
+  - "OFF"
+  - "ON"
+  - "INTENSITY dddd" (where dddd is 0.00 to 1.00)
+
+Signal Masts:
+  - Aspect name format: "AspectName; Lit; Unheld"
+  - Examples: "Clear; Lit; Unheld", "Approach Medium; Lit; Unheld"
+  - Aspect names depend on signal system definition
+
+LCOS EVENT TO JMRI MQTT MAPPING
+--------------------------------
+Operations Events (handleOperationsEvents switch cases):
+
+Status Events:
+- Case 1:  Node status event
+  → Not mapped (internal LCOS event)
+
+- Case 2:  Turnout status event
+  → Topic: track/turnout/{pkt->data0}
+  → Content: "CLOSED" (if pkt->data1 == 0) or "THROWN" (if pkt->data1 == 1)
+
+- Case 3:  Signal status event
+  → Topic: track/signalmast/{pkt->data0}
+  → Content: Signal aspect name (need to map pkt->data1 to aspect names)
+  → Note: May need lookup table for LCOS signal values to JMRI aspects
+
+- Case 4:  Block status event
+  → Topic: track/sensor/{pkt->data0}
+  → Content: "ACTIVE" (occupied) or "INACTIVE" (clear)
+  → Map: pkt->data1 == 0 → "INACTIVE", pkt->data1 != 0 → "ACTIVE"
+
+- Case 5:  Crossing status event
+  → Topic: track/sensor/crossing/{pkt->data0} (or track/sensor/{pkt->data0})
+  → Content: "ACTIVE" or "INACTIVE"
+
+- Case 6:  Track power status event
+  → Topic: track/power
+  → Content: "ON" (if pkt->data1 != 0) or "OFF" (if pkt->data1 == 0)
+
+- Case 7:  MPO status event
+  → Topic: track/sensor/mpo/{pkt->data0} (or track/sensor/{pkt->data0})
+  → Content: "ACTIVE" or "INACTIVE"
+
+- Case 11: Button status event
+  → Topic: track/sensor/{pkt->data0}
+  → Content: "ACTIVE" (pressed) or "INACTIVE" (released)
+
+- Case 12: Switch contact status event
+  → Topic: track/sensor/{pkt->data0}
+  → Content: "ACTIVE" or "INACTIVE"
+
+Command Events:
+- Case 16: Turnout command
+  → Same as Case 2 (turnout status)
+  → Topic: track/turnout/{pkt->data0}
+  → Content: "CLOSED" or "THROWN"
+
+- Case 17: Signal command
+  → Same as Case 3 (signal status)
+  → Topic: track/signalmast/{pkt->data0}
+  → Content: Signal aspect name
+
+- Case 18: Crossing command
+  → Same as Case 5 (crossing status)
+
+- Case 21: Track power command
+  → Same as Case 6 (track power status)
+  → Topic: track/power
+  → Content: "ON" or "OFF"
+
+- Case 22: Block command
+  → Same as Case 4 (block status)
+
+- Case 23: Global Route Command
+  → Topic: track/sensor/route/{pkt->data0} (or custom mapping)
+  → Content: "ACTIVE" or "INACTIVE"
+  → Note: Routes may need special handling as they affect multiple objects
+
+IMPLEMENTATION TASKS
+---------------------
+[ ] Create helper functions for MQTT message formatting
+    - Place in separate header file (.h) and implementation file (.cpp)
+    - sendMQTTMessage(topic, content) - outputs "topic content\n"
+    - sendMQTTTopic(topicTemplate, uid, content) - formats topic with UID
+    - State conversion functions:
+      * turnoutState(byte data1) → "CLOSED"/"THROWN"
+      * sensorState(byte data1) → "ACTIVE"/"INACTIVE"
+      * powerState(byte data1) → "ON"/"OFF"
+
+[ ] Add MQTT serial output to handleOperationsEvents() switch cases
+    [ ] Case 2: Turnout status
+    [ ] Case 3: Signal status (may need aspect mapping table)
+    [ ] Case 4: Block status
+    [ ] Case 5: Crossing status
+    [ ] Case 6: Track power status
+    [ ] Case 7: MPO status
+    [ ] Case 11: Button status
+    [ ] Case 12: Switch contact status
+    [ ] Case 16: Turnout command
+    [ ] Case 17: Signal command
+    [ ] Case 18: Crossing command
+    [ ] Case 21: Track power command
+    [ ] Case 22: Block command
+    [ ] Case 23: Route command
+
+[ ] Determine signal aspect mapping
+    - Need to understand LCOS signal value encoding (pkt->data1)
+    - Map to JMRI aspect names (e.g., "Clear", "Approach", "Stop")
+    - May need lookup table or calculation
+
+[ ] Test message format
+    - Verify topic/content format is correct
+    - Test with serial monitor
+    - Verify messages can be parsed by MQTT bridge program
+
+[ ] Optional: Add configuration events output (handleGetSet)
+    - May not be needed for basic JMRI integration
+    - Could be useful for debugging
+
+[ ] Optional: Add system events output (handleSystemEvents)
+    - Power mode changes
+    - System status
+
+TECHNICAL NOTES
+---------------
+- Serial baud rate: 115200 (line 39)
+- MQTT Channel prefix: JMRI will prepend its configured MQTT Channel
+  (default can be blank, so topics start with "track/...")
+- Message format must be exactly: "topic content\n" (space between, newline at end)
+- UID (pkt->data0) is used as object identifier in topics
+- State values typically in pkt->data1
+- Consider memory constraints when using sprintf() for topic formatting
+
+OPEN QUESTIONS
+--------------
+1. How are LCOS signal values (pkt->data1) encoded for signals?
+   - Need to map to JMRI aspect names
+   - May need lookup table or bit field decoding
+
+2. Should route commands (Case 23) be handled differently?
+   - Routes may affect multiple turnouts/signals
+   - May need to publish multiple MQTT messages
+
+3. Should we handle bidirectional communication?
+   - Currently only LCOS → JMRI
+   - May need to receive MQTT commands from serial and forward to LCOS network
+
+4. Are there any events that should NOT be forwarded to JMRI?
+   - Internal LCOS events (Case 1: node status?)
+   - Reserved cases (8, 9, 10, 13, 14, 15, 19, 20)
+
+5. Should configuration events be forwarded?
+   - handleGetSet() events are typically internal
+   - May be useful for debugging or advanced integration
+
+LIBRARY INFORMATION
+--------------------
+LCOS Library Location: ./lcos/
+- lcos.h / lcos.cpp - Main LCOS library
+- radio.h - Radio pin definitions
+- nRF24-master/ - RF24 radio library
+- nRF24Network-master/ - RF24Network library
+
+Key Constants (from lcos.h):
+- PACKET_SIZE = 15
+- ETYPE_OPERATING = 1
+- ETYPE_CONFIGURATION = 14
+- ETYPE_SYSTEM = 15
+- EVENT_TURNOUT = 0x2
+- EVENT_SIGNAL = 0x3
+- EVENT_BLOCK = 0x4
+- EVENT_TRACK_POWER = 0x6
+- EVENT_TURNOUT_CMD = 0x10
+- EVENT_SIGNAL_CMD = 0x11
+- EVENT_TRACK_PWR_CMD = 0x15
+- EVENT_BLOCK_CMD = 0x16
+- EVENT_GLOBAL_ROUTE_CMD = 0x17
+
+REFERENCES
+----------
+JMRI MQTT Documentation:
+https://www.jmri.org/help/en/html/hardware/mqtt/index.shtml
+
+JMRI Default Topic Settings (from user's configuration):
+- All topics use format: track/{objecttype}/{uid} or cab/{loco}/{function}
+- Power topic: track/power (no UID)
+- Placeholder {0} = object UID (pkt->data0)
+- Placeholder {1} = function number (for throttle functions)
