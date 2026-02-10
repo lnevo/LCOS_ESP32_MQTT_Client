@@ -52,8 +52,8 @@ const char *powerStateToPayload(byte data1);
 /**
  * Publish one MQTT line for an operations event. Uses node+uid packed address and
  * event type to pick topic prefix and payload. No-op for event types that don't map to MQTT.
- * Call from handleOperationsEvents for each case (e.g. mqttPublishOperationEvent(Serial, pkt->event, pkt->source_node, pkt->data0, pkt->data1)).
+ * State from data1 (LCOS sendShortMessage/broadcastOpState put primary value in data1); data2 passed for future use.
  */
-void mqttPublishOperationEvent(Print &out, byte event, uint16_t node, byte uid, byte data1);
+void mqttPublishOperationEvent(Print &out, byte event, uint16_t node, byte uid, byte data1, byte data2);
 
 #endif // MQTT_SERIAL_H

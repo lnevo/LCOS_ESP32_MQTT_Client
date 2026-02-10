@@ -25,8 +25,8 @@ char *mqttTopicWithPackedAddress(char *buf, size_t bufSize, const char *prefix, 
 }
 
 const char *turnoutStateToPayload(byte data1) {
-  /* LCOS: 0 = thrown, 1 = closed (normal). JMRI: CLOSED / THROWN */
-  return data1 == 0 ? "THROWN" : "CLOSED";
+  /* JMRI: 0 = CLOSED, 1 = THROWN. If your node uses the opposite, swap the strings. */
+  return data1 == 0 ? "CLOSED" : "THROWN";
 }
 
 const char *sensorStateToPayload(byte data1) {
@@ -43,7 +43,7 @@ const char *powerStateToPayload(byte data1) {
 #define EV_SWITCH       0x0C
 #define EV_TURNOUT_CMD  0x10
 
-void mqttPublishOperationEvent(Print &out, byte event, uint16_t node, byte uid, byte data1) {
+void mqttPublishOperationEvent(Print &out, byte event, uint16_t node, byte uid, byte data1, byte data2) {
   char topic[32];
   const char *payload = nullptr;
   const char *prefix = nullptr;
@@ -52,6 +52,7 @@ void mqttPublishOperationEvent(Print &out, byte event, uint16_t node, byte uid, 
     case EV_TURNOUT:
     case EV_TURNOUT_CMD:
       prefix = MQTT_TOPIC_TURNOUT;
+      /* LCOS library: sendShortMessage(..., uid, data1, data2) → state in data1 */
       payload = turnoutStateToPayload(data1);
       break;
     case EV_BUTTON:
