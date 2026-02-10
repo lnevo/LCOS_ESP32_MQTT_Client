@@ -22,8 +22,8 @@
 #define SYS_ID "LCOS Custom Client Node"
 
 // Basic Configuration Items
-byte channel = 75;
-uint16_t thisNode = 05;
+byte channel = 80;
+uint16_t thisNode = 015;
 byte childMap = 0;
 byte configType = CONFIG_TYPE_CUSTOM_CLIENT;
 
