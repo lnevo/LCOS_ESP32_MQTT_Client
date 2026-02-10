@@ -52,8 +52,8 @@ void mqttPublishOperationEvent(Print &out, byte event, uint16_t node, byte uid, 
     case EV_TURNOUT:
     case EV_TURNOUT_CMD:
       prefix = MQTT_TOPIC_TURNOUT;
-      /* LCOS library: sendShortMessage(..., uid, data1, data2) → state in data1 */
-      payload = turnoutStateToPayload(data1);
+      /* Try data2 for state; if node always sends data1=0, position may be in data2 */
+      payload = turnoutStateToPayload(data2);
       break;
     case EV_BUTTON:
     case EV_SWITCH:
