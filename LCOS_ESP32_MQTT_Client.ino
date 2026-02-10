@@ -113,12 +113,24 @@ void handleOperationsEvents(DATAGRAM *pkt){
     case 2: // turnout status event
       Serial.print(F("DBG TURNOUT event=2 from="));
       Serial.print(pkt->source_node);
-      Serial.print(F(" uid="));
+      Serial.print(F(" to="));
+      Serial.print(pkt->to_node);
+      Serial.print(F(" d0="));
       Serial.print((int)pkt->data0);
       Serial.print(F(" d1="));
       Serial.print((int)pkt->data1);
       Serial.print(F(" d2="));
-      Serial.println((int)pkt->data2);
+      Serial.print((int)pkt->data2);
+      Serial.print(F(" d3="));
+      Serial.print((int)pkt->data3);
+      Serial.print(F(" d4="));
+      Serial.print((int)pkt->data4);
+      Serial.print(F(" d5="));
+      Serial.print((int)pkt->data5);
+      Serial.print(F(" d6="));
+      Serial.print((int)pkt->data6);
+      Serial.print(F(" cr="));
+      Serial.println((int)pkt->cmd_response);
       mqttPublishOperationEvent(Serial, pkt->event, pkt->source_node, pkt->data0, pkt->data1, pkt->data2);
       break;
     case 3: // signal status event
@@ -163,12 +175,24 @@ void handleOperationsEvents(DATAGRAM *pkt){
     case 16: // turnout command
       Serial.print(F("DBG TURNOUT event=16 from="));
       Serial.print(pkt->source_node);
-      Serial.print(F(" uid="));
+      Serial.print(F(" to="));
+      Serial.print(pkt->to_node);
+      Serial.print(F(" d0="));
       Serial.print((int)pkt->data0);
       Serial.print(F(" d1="));
       Serial.print((int)pkt->data1);
       Serial.print(F(" d2="));
-      Serial.println((int)pkt->data2);
+      Serial.print((int)pkt->data2);
+      Serial.print(F(" d3="));
+      Serial.print((int)pkt->data3);
+      Serial.print(F(" d4="));
+      Serial.print((int)pkt->data4);
+      Serial.print(F(" d5="));
+      Serial.print((int)pkt->data5);
+      Serial.print(F(" d6="));
+      Serial.print((int)pkt->data6);
+      Serial.print(F(" cr="));
+      Serial.println((int)pkt->cmd_response);
       mqttPublishOperationEvent(Serial, pkt->event, pkt->source_node, pkt->data0, pkt->data1, pkt->data2);
       break; 
     case 17: // signal command
