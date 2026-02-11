@@ -13,6 +13,12 @@
 struct DATAGRAM;  // forward decl; include lcos.h in .cpp
 
 // JMRI receive topic prefixes (append packed address via mqttTopicWithPackedAddress)
+// Packed address = node*100 + uid. LCOS UID ranges (from lcos.h):
+//   0–7   blocks, 8–15  turnouts, 16–31 routes, 32–47 signals, 48–49 crossings,
+//   50    mpos,   51–66 relays,  67–82 control objects (buttons etc.), 83+ scene objects.
+//   Turnout topic: uid = data0 (already full turnout UID 8–15).
+//   Sensor topic (blocks):  uid = UID_OFFSET_BLOCKS + data0 (data0 = block index → 0–7).
+//   Sensor topic (button/switch): uid = UID_OFFSET_CONTROL_OBJECTS + data0 (data0 = index → 67–82).
 #define MQTT_TOPIC_TURNOUT   "track/turnout/"
 #define MQTT_TOPIC_SENSOR    "track/sensor/"
 #define MQTT_TOPIC_LIGHT     "track/light/"

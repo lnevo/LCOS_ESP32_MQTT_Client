@@ -38,11 +38,13 @@ const char *powerStateToPayload(byte data1) {
   return data1 == 0 ? "OFF" : "ON";
 }
 
-// LCOS operations event codes we publish (turnouts, sensors, lights only)
+// LCOS operations event codes we publish (turnouts, sensors, blocks, lights only)
 #define EV_TURNOUT      0x02
+#define EV_BLOCK        0x04
 #define EV_BUTTON       0x0B
 #define EV_SWITCH       0x0C
 #define EV_TURNOUT_CMD  0x10
+#define EV_BLOCK_CMD    0x16
 
 // Internal: print full operation payload (event, from, to, d0-d6, cr) for any event type.
 static void debugOperationPayload(Print &out, byte event, uint16_t from_node, uint16_t to_node,
@@ -84,7 +86,7 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
   byte data1 = pkt->data1;
   byte data2 = pkt->data2;
 
-  if (debug && (event == EV_TURNOUT || event == EV_TURNOUT_CMD || event == EV_BUTTON || event == EV_SWITCH)) {
+  if (debug && (event == EV_TURNOUT || event == EV_TURNOUT_CMD || event == EV_BLOCK || event == EV_BLOCK_CMD || event == EV_BUTTON || event == EV_SWITCH)) {
     debugOperationPayload(out, event, node, pkt->to_node, uid, data1, data2,
       pkt->data3, pkt->data4, pkt->data5, pkt->data6, pkt->cmd_response);
   }
@@ -101,12 +103,14 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
       /* Node sends data1=1 for CLOSED, data1=2 for THROWN; map to JMRI 0=CLOSED 1=THROWN */
       payload = turnoutStateToPayload((data1 == 1) ? 0 : 1);
       break;
+    case EV_BLOCK:
+    case EV_BLOCK_CMD:
     case EV_BUTTON:
     case EV_SWITCH:
       prefix = MQTT_TOPIC_SENSOR;
       payload = sensorStateToPayload(data1);
-      /* data0 is button/switch index (0,1,…); LCOS UID = UID_OFFSET_CONTROL_OBJECTS + index */
-      topic_uid = UID_OFFSET_CONTROL_OBJECTS + uid;
+      /* data0 is index; LCOS UID = offset + index (blocks 0–7, button/switch 67–82) */
+      topic_uid = (event == EV_BLOCK || event == EV_BLOCK_CMD) ? (UID_OFFSET_BLOCKS + uid) : (UID_OFFSET_CONTROL_OBJECTS + uid);
       break;
     // lights: add case when LCOS event is defined
     default:
