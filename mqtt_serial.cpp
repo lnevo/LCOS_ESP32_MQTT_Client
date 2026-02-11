@@ -98,7 +98,7 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
     case EV_TURNOUT_CMD:
       prefix = MQTT_TOPIC_TURNOUT;
       /* Node sends d1=d2=2 for CLOSED, d1=d2=1 for THROWN; map to JMRI 0=CLOSED 1=THROWN */
-      payload = turnoutStateToPayload((data1 == 1) ? 1 : 0);
+      payload = turnoutStateToPayload((data1 == 1) ? 0 : 1);
       break;
     case EV_BUTTON:
     case EV_SWITCH:
