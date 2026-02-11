@@ -92,18 +92,21 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
   char topic[32];
   const char *payload = nullptr;
   const char *prefix = nullptr;
+  byte topic_uid = uid;  // default: data0 is already full LCOS UID (e.g. turnouts 8–15)
 
   switch (event) {
     case EV_TURNOUT:
     case EV_TURNOUT_CMD:
       prefix = MQTT_TOPIC_TURNOUT;
-      /* Node sends d1=d2=2 for CLOSED, d1=d2=1 for THROWN; map to JMRI 0=CLOSED 1=THROWN */
+      /* Node sends data1=1 for CLOSED, data1=2 for THROWN; map to JMRI 0=CLOSED 1=THROWN */
       payload = turnoutStateToPayload((data1 == 1) ? 0 : 1);
       break;
     case EV_BUTTON:
     case EV_SWITCH:
       prefix = MQTT_TOPIC_SENSOR;
       payload = sensorStateToPayload(data1);
+      /* data0 is button/switch index (0,1,…); LCOS UID = UID_OFFSET_CONTROL_OBJECTS + index */
+      topic_uid = UID_OFFSET_CONTROL_OBJECTS + uid;
       break;
     // lights: add case when LCOS event is defined
     default:
@@ -111,7 +114,7 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
   }
 
   if (prefix && payload) {
-    mqttTopicWithPackedAddress(topic, sizeof(topic), prefix, node, uid);
+    mqttTopicWithPackedAddress(topic, sizeof(topic), prefix, node, topic_uid);
     mqttPublish(out, topic, payload);
   }
 }
