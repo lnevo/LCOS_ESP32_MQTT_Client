@@ -45,10 +45,10 @@ const char *powerStateToPayload(byte data1) {
 static const char *signalMastAspectName(byte data1) {
   // Placeholder mapping; LCOS does not define aspect codes in lcos.h/cpp. Adjust to match your nodes.
   switch (data1) {
-    case 0:  return "Stop";
-    case 1:  return "Approach";
-    case 2:  return "Clear";
-    case 3:  return "Approach Medium";
+    case 0:  return "Off";
+    case 1:  return "Stop";
+    case 2:  return "Approach";
+    case 3:  return "Clear";
     case 4:  return "Permissive";
     default: return "Dark";
   }

@@ -1,0 +1,1 @@
+"c:\Program Files"\Mosquitto\mosquitto_sub.exe -h 192.168.137.1 -t "#" -v
