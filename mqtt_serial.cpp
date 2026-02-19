@@ -38,12 +38,38 @@ const char *powerStateToPayload(byte data1) {
   return data1 == 0 ? "OFF" : "ON";
 }
 
-// LCOS operations event codes we publish (turnouts, sensors, blocks, lights only)
+// --- Signal mast (from lcos.h/lcos.cpp only: EVENT_SIGNAL 0x3, EVENT_SIGNAL_CMD 0x11,
+//     UID_OFFSET_SIGNALS 32; sendShortMessage uses data0=uid, data1=data1, data2=data2.
+//     No aspect encoding is defined in the library; data0/data1 semantics are from convention.)
+// JMRI expects "AspectName; Lit|Unlit; Held|Unheld" on track/signalmast/ (JMRI MQTT doc).
+static const char *signalMastAspectName(byte data1) {
+  // Placeholder mapping; LCOS does not define aspect codes in lcos.h/cpp. Adjust to match your nodes.
+  switch (data1) {
+    case 0:  return "Stop";
+    case 1:  return "Approach";
+    case 2:  return "Clear";
+    case 3:  return "Approach Medium";
+    case 4:  return "Permissive";
+    default: return "Dark";
+  }
+}
+
+// Returns pointer to static buffer: "AspectName; Lit; Unheld".
+const char *signalMastStateToPayload(byte data1) {
+  static char buf[48];
+  const char *aspect = signalMastAspectName(data1);
+  snprintf(buf, sizeof(buf), "%s; Lit; Unheld", aspect);
+  return buf;
+}
+
+// LCOS operations event codes we publish (turnouts, sensors, blocks, signal masts, lights)
 #define EV_TURNOUT      0x02
+#define EV_SIGNAL       0x03
 #define EV_BLOCK        0x04
 #define EV_BUTTON       0x0B
 #define EV_SWITCH       0x0C
 #define EV_TURNOUT_CMD  0x10
+#define EV_SIGNAL_CMD   0x11
 #define EV_BLOCK_CMD    0x16
 
 // Internal: print full operation payload (event, from, to, d0-d6, cr) for any event type.
@@ -86,7 +112,7 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
   byte data1 = pkt->data1;
   byte data2 = pkt->data2;
 
-  if (debug && (event == EV_TURNOUT || event == EV_TURNOUT_CMD || event == EV_BLOCK || event == EV_BLOCK_CMD || event == EV_BUTTON || event == EV_SWITCH)) {
+  if (debug && (event == EV_TURNOUT || event == EV_TURNOUT_CMD || event == EV_SIGNAL || event == EV_SIGNAL_CMD || event == EV_BLOCK || event == EV_BLOCK_CMD || event == EV_BUTTON || event == EV_SWITCH)) {
     debugOperationPayload(out, event, node, pkt->to_node, uid, data1, data2,
       pkt->data3, pkt->data4, pkt->data5, pkt->data6, pkt->cmd_response);
   }
@@ -102,6 +128,13 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
       prefix = MQTT_TOPIC_TURNOUT;
       /* Node sends data1=1 for CLOSED, data1=2 for THROWN; map to JMRI 0=CLOSED 1=THROWN */
       payload = turnoutStateToPayload((data1 == 1) ? 0 : 1);
+      break;
+    case EV_SIGNAL:
+    case EV_SIGNAL_CMD:
+      prefix = MQTT_TOPIC_SIGNALMAST;
+      payload = signalMastStateToPayload(data1);
+      /* lcos.h: UID_OFFSET_SIGNALS 32 (range 32–47). data0 = uid or index not defined in library; we use offset+data0. */
+      topic_uid = UID_OFFSET_SIGNALS + uid;
       break;
     case EV_BLOCK:
     case EV_BLOCK_CMD:
@@ -121,4 +154,4 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
     mqttTopicWithPackedAddress(topic, sizeof(topic), prefix, node, topic_uid);
     mqttPublish(out, topic, payload);
   }
-}
+} 

@@ -19,6 +19,7 @@ struct DATAGRAM;  // forward decl; include lcos.h in .cpp
 //   Turnout topic: uid = data0 (already full turnout UID 8–15).
 //   Sensor topic (blocks):  uid = UID_OFFSET_BLOCKS + data0 (data0 = block index → 0–7).
 //   Sensor topic (button/switch): uid = UID_OFFSET_CONTROL_OBJECTS + data0 (data0 = index → 67–82).
+//   Signal mast topic: uid = UID_OFFSET_SIGNALS + data0 (data0 = signal index → 32–47).
 #define MQTT_TOPIC_TURNOUT   "track/turnout/"
 #define MQTT_TOPIC_SENSOR    "track/sensor/"
 #define MQTT_TOPIC_LIGHT     "track/light/"
@@ -53,6 +54,13 @@ const char *sensorStateToPayload(byte data1);
 
 /** Power: data1 0 → "OFF", else → "ON" */
 const char *powerStateToPayload(byte data1);
+
+/**
+ * Signal mast: JMRI format "AspectName; Lit; Unheld" (see JMRI MQTT doc).
+ * lcos.h/cpp define only EVENT_SIGNAL, EVENT_SIGNAL_CMD, UID_OFFSET_SIGNALS; no aspect
+ * encoding. We treat data1 as aspect code and use a placeholder mapping in .cpp; adjust to match nodes.
+ */
+const char *signalMastStateToPayload(byte data1);
 
 // --- One-call wrappers: build topic (packed address), choose payload, publish ---
 
