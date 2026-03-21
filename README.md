@@ -245,6 +245,32 @@ void handleOperationsEvents(DATAGRAM *pkt) {
 
 **Centralized Traffic Control (CTC)** functions are built into LCOS for managing complex railroad operations. These functions allow you to control routes, signals, blocks, and turnouts in a coordinated manner.
 
+### LCOS API (authoritative notes)
+
+- **UIDs are static.** A UID map defines assignments; a UID reliably addresses specific objects on a node so long as those objects exist.
+- **Bridging:** When bridging LCOS to an external system (e.g. JMRI), dedicate a node to that connection so the bridge is "just another node" on the LCOS network.
+
+#### Turnout and Signal commands (lock semantics)
+
+- **Commands:** Operations Event `0x10` (Turnout Command), `0x11` (Signal Command).
+- **Status (listen):** Turnout status on Operations Event `0x2`; Signal status on Operations Event `0x3`.
+
+**Command functions** (e.g. in `cmd_response` or as specified by the protocol):
+
+| Value | Meaning |
+|-------|--------|
+| `0x1` | Get State |
+| `0x2` | Set State without Lock |
+| `0x3` | Set State with Lock |
+| `0x7f` | Release Lock |
+
+Lock/release for signals is not yet implemented; for turnouts it is only partially implemented. Semantics are the same for both when implemented. Lock authority: MASTER has automatic lock/release rights; MASTER may delegate to another node (e.g. CTC). Whether any node can issue lock commands or only MASTER/designated is a design decision.
+
+**State options (data1):**
+
+- **Turnouts:** `0x1` = Align closed/main, `0x2` = Align thrown/divergent, `0x3` = Toggle.
+- **Signals:** `0x0` = OFF, `0x1` = Stop, `0x2` = Clear, `0x3` = Approach/Caution.
+
 ### UID Offsets for CTC Objects
 
 LCOS uses predefined UID ranges for different object types:

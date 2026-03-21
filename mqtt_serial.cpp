@@ -38,18 +38,15 @@ const char *powerStateToPayload(byte data1) {
   return data1 == 0 ? "OFF" : "ON";
 }
 
-// --- Signal mast (from lcos.h/lcos.cpp only: EVENT_SIGNAL 0x3, EVENT_SIGNAL_CMD 0x11,
-//     UID_OFFSET_SIGNALS 32; sendShortMessage uses data0=uid, data1=data1, data2=data2.
-//     No aspect encoding is defined in the library; data0/data1 semantics are from convention.)
-// JMRI expects "AspectName; Lit|Unlit; Held|Unheld" on track/signalmast/ (JMRI MQTT doc).
+// --- Signal mast (EVENT_SIGNAL 0x3 status, EVENT_SIGNAL_CMD 0x11 command; UID_OFFSET_SIGNALS 32.)
+//     State (data1) per LCOS API: 0x0=OFF, 0x1=Stop, 0x2=Clear, 0x3=Approach/Caution.
+// JMRI expects "AspectName; Lit|Unlit; Held|Unheld" on track/signalmast/.
 static const char *signalMastAspectName(byte data1) {
-  // Placeholder mapping; LCOS does not define aspect codes in lcos.h/cpp. Adjust to match your nodes.
   switch (data1) {
     case 0:  return "Off";
     case 1:  return "Stop";
-    case 2:  return "Approach";
-    case 3:  return "Clear";
-    case 4:  return "Permissive";
+    case 2:  return "Clear";
+    case 3:  return "Approach";  // Approach/Caution
     default: return "Dark";
   }
 }

@@ -104,6 +104,13 @@ extern char *__brkval;
 #define EVENT_TRACK_PWR_CMD 0x15
 #define EVENT_BLOCK_CMD 0x16
 #define EVENT_GLOBAL_ROUTE_CMD 0x17
+// Command functions for EVENT_TURNOUT_CMD / EVENT_SIGNAL_CMD (e.g. cmd_response)
+#define CMD_FUNC_GET_STATE   0x1
+#define CMD_FUNC_SET_NO_LOCK 0x2
+#define CMD_FUNC_SET_WITH_LOCK 0x3
+#define CMD_FUNC_RELEASE_LOCK 0x7f
+// Turnout state (data1): 0x1 closed/main, 0x2 thrown/divergent, 0x3 toggle
+// Signal state (data1): 0x0 OFF, 0x1 Stop, 0x2 Clear, 0x3 Approach/Caution
 ////////////////////////////////////////
 // TYPES
 ////////////////////////////////////////

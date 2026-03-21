@@ -253,6 +253,16 @@ IMPLEMENTATION TASKS
     - Power mode changes
     - System status
 
+LCOS API (authoritative notes)
+------------------------------
+- UIDs are static; UID map defines assignments. Bridge = dedicate a node to the connection.
+- Turnout/Signal commands: Event 0x10 (turnout), 0x11 (signal). Listen for status on 0x2, 0x3.
+- Command functions: 0x1 Get State, 0x2 Set without Lock, 0x3 Set with Lock, 0x7f Release Lock.
+  Lock/release for signals not yet implemented; turnouts partial. MASTER has lock rights; can delegate.
+- Turnout data1: 0x1 closed/main, 0x2 thrown/divergent, 0x3 toggle.
+- Signal data1: 0x0 OFF, 0x1 Stop, 0x2 Clear, 0x3 Approach/Caution.
+- See README "LCOS API (authoritative notes)" for full detail.
+
 TECHNICAL NOTES
 ---------------
 - Serial baud rate: 115200 (line 39)
@@ -266,8 +276,7 @@ TECHNICAL NOTES
 OPEN QUESTIONS
 --------------
 1. How are LCOS signal values (pkt->data1) encoded for signals?
-   - Need to map to JMRI aspect names
-   - May need lookup table or bit field decoding
+   - Resolved per LCOS API: 0=Off, 1=Stop, 2=Clear, 3=Approach/Caution (see README/todo LCOS API notes)
 
 2. Should route commands (Case 23) be handled differently?
    - Routes may affect multiple turnouts/signals
