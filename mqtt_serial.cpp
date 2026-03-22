@@ -45,8 +45,8 @@ static const char *signalMastAspectName(byte data1) {
   switch (data1) {
     case 0:  return "Off";
     case 1:  return "Stop";
-    case 2:  return "Clear";
-    case 3:  return "Approach";  // Approach/Caution
+    case 2:  return "Approach";  // Approach/Caution
+    case 3:  return "Clear";
     default: return "Dark";
   }
 }
