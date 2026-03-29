@@ -4,6 +4,7 @@
  * Protocol: <topic><space><payload>\n (LF only). See todo.txt SERIAL OUTPUT PROTOCOL.
  */
 
+/* DBG … lines on Serial for turnout/signal/block/… publishes: 1 = ON, 0 = OFF (not inverted — 0 is “false” in C). */
 #ifndef MQTT_SERIAL_OPS_DEBUG
 #define MQTT_SERIAL_OPS_DEBUG 1
 #endif
@@ -116,7 +117,7 @@ static void debugOperationPayload(Print &out, byte event, uint16_t lcos_source_n
 }
 
 void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt) {
-  mqttPublishOperationEvent(out, pkt, (bool)MQTT_SERIAL_OPS_DEBUG);
+  mqttPublishOperationEvent(out, pkt, MQTT_SERIAL_OPS_DEBUG != 0);
 }
 
 void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {

@@ -74,7 +74,7 @@ const char *signalMastStateToPayload(byte data1);
  *
  * Turnout 0 on a node is UID (UID_OFFSET_TURNOUTS + 0) = 8. UID 27 is route band (16+11), not turnout 0.
  *
- * Two-arg overload: debug controlled by MQTT_SERIAL_OPS_DEBUG in mqtt_serial.cpp (default 1).
+ * Two-arg overload: MQTT_SERIAL_OPS_DEBUG in mqtt_serial.cpp (1 = DBG on, 0 = off).
  * Three-arg: explicit debug on/off regardless of MQTT_SERIAL_OPS_DEBUG.
  */
 void mqttPublishOperationEvent(Print &out, const struct DATAGRAM *pkt);
