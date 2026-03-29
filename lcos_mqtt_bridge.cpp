@@ -24,10 +24,10 @@
 static const uint16_t kSubscribeTargets[] = { 4, 3, 13 };
 
 // --- Serial text: heartbeat from Python (serial_to_mqtt.py) ---
-// Packed JMRI 410 = node 4, turnout UID 10 -> CLOSED on PING (ACK always sent first).
+// Packed JMRI 308 = node 3, turnout UID 8 (UID_OFFSET_TURNOUTS + 0) -> CLOSED on PING (ACK first).
 #define HB_SERIAL_TOKEN "PING"
-#define HB_TURNOUT_NODE 4
-#define HB_TURNOUT_UID 10
+#define HB_TURNOUT_NODE 3
+#define HB_TURNOUT_UID 8
 
 static char s_serialLineBuf[128];
 static size_t s_serialLineLen = 0;
