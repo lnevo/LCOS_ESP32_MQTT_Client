@@ -26,9 +26,9 @@
 #define INCLUDE_SWITCH_EVENTS         2048
 #define INCLUDE_SENSOR_EVENTS         4096
 
-// Block, turnout, signal, button, switch, track power
+// Block, turnout, signal, button, switch, track power, sensor
 #define SUBSCRIBE_EVENT_MASK (INCLUDE_BLOCK_EVENTS | INCLUDE_TURNOUT_EVENTS | INCLUDE_SIGNAL_EVENTS \
-  | INCLUDE_BUTTON_EVENTS | INCLUDE_SWITCH_EVENTS | INCLUDE_TRACK_POWER_EVENTS)
+  | INCLUDE_BUTTON_EVENTS | INCLUDE_SWITCH_EVENTS | INCLUDE_TRACK_POWER_EVENTS | INCLUDE_SENSOR_EVENTS)
 
 /***********************************************
  * Header files
