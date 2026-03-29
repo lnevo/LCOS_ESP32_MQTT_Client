@@ -4,6 +4,10 @@
  * Protocol: <topic><space><payload>\n (LF only). See todo.txt SERIAL OUTPUT PROTOCOL.
  */
 
+#ifndef MQTT_SERIAL_OPS_DEBUG
+#define MQTT_SERIAL_OPS_DEBUG 1
+#endif
+
 #include "mqtt_serial.h"
 #include "lcos/lcos.h"
 #include <stdio.h>
@@ -112,7 +116,7 @@ static void debugOperationPayload(Print &out, byte event, uint16_t lcos_source_n
 }
 
 void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt) {
-  mqttPublishOperationEvent(out, pkt, false);
+  mqttPublishOperationEvent(out, pkt, (bool)MQTT_SERIAL_OPS_DEBUG);
 }
 
 void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {

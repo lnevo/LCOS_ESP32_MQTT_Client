@@ -13,7 +13,8 @@ We publish the "ACK ..." line to HEARTBEAT_MQTT_TOPIC (see DEBUG_HEARTBEAT).
 Usage (Windows):
   python serial_to_mqtt.py --com COM3 --broker 192.168.137.1
   run_serial_mqtt.cmd
-  run_serial_mqtt_debug.cmd
+  run_serial_mqtt.cmd verbose    # -verbose / --verbose : print TX lines, no serial PING
+  run_serial_mqtt_debug.cmd        # PING heartbeat + verbose
 
 Requires: pip install pyserial paho-mqtt
 """
