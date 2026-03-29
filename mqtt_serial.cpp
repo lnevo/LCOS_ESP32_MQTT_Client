@@ -39,7 +39,8 @@ const char *powerStateToPayload(byte data1) {
 }
 
 // --- Signal mast (EVENT_SIGNAL 0x3 status, EVENT_SIGNAL_CMD 0x11 command; UID_OFFSET_SIGNALS 32.)
-//     State (data1) per LCOS API: 0x0=OFF, 0x1=Stop, 0x2=Clear, 0x3=Approach/Caution.
+//     data1: 0=Off, 1=Stop. For 2/3: formal LCOS API lists 2=Clear, 3=Approach; on this layout we observe
+//     2=Approach, 3=Clear — adjust here if your nodes match the doc instead.
 // JMRI expects "AspectName; Lit|Unlit; Held|Unheld" on track/signalmast/.
 static const char *signalMastAspectName(byte data1) {
   switch (data1) {
