@@ -82,13 +82,15 @@ const char *signalMastStateToPayload(byte data1) {
 #define EV_SIGNAL_CMD   0x11
 #define EV_BLOCK_CMD    0x16
 
-// Internal: print full operation payload (event, from, to, d0-d6, cr) for any event type.
-static void debugOperationPayload(Print &out, byte event, uint16_t from_node, uint16_t to_node,
+// Internal: LCOS payload source vs RF24 last-hop often differ on relay trees (compare when "wrong" node in MQTT).
+static void debugOperationPayload(Print &out, byte event, uint16_t lcos_source_node, uint16_t rf24_from_node, uint16_t to_node,
   byte d0, byte d1, byte d2, byte d3, byte d4, byte d5, byte d6, byte cr) {
   out.print(F("DBG event="));
   out.print((int)event);
-  out.print(F(" from="));
-  out.print(from_node);
+  out.print(F(" src="));
+  out.print(lcos_source_node);
+  out.print(F(" rf24="));
+  out.print(rf24_from_node);
   out.print(F(" to="));
   out.print(to_node);
   out.print(F(" d0="));
@@ -123,7 +125,7 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
   byte data2 = pkt->data2;
 
   if (debug && (event == EV_TURNOUT || event == EV_TURNOUT_CMD || event == EV_SIGNAL || event == EV_SIGNAL_CMD || event == EV_BLOCK || event == EV_BLOCK_CMD || event == EV_BUTTON || event == EV_SWITCH)) {
-    debugOperationPayload(out, event, node, pkt->to_node, uid, data1, data2,
+    debugOperationPayload(out, event, node, pkt->from_node, pkt->to_node, uid, data1, data2,
       pkt->data3, pkt->data4, pkt->data5, pkt->data6, pkt->cmd_response);
   }
 

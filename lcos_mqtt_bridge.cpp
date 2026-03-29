@@ -24,7 +24,8 @@
 static const uint16_t kSubscribeTargets[] = { 4, 3, 13 };
 
 // --- Serial text: heartbeat from Python (serial_to_mqtt.py) ---
-// Packed JMRI 308 = node 3, turnout UID 8 (UID_OFFSET_TURNOUTS + 0) -> CLOSED on PING (ACK first).
+// sendShortMessage(..., dest, ..., uid, ...) uses RF24/LCOS node address as **decimal** (docs often show octal: 03=3, 010=8).
+// Turnout index 0 => UID UID_OFFSET_TURNOUTS+0 (8). Replies on MQTT use pkt.source_node from the wire, not dest.
 #define HB_SERIAL_TOKEN "PING"
 #define HB_TURNOUT_NODE 3
 #define HB_TURNOUT_UID 8

@@ -66,10 +66,15 @@ const char *signalMastStateToPayload(byte data1);
 // --- One-call wrappers: build topic (packed address), choose payload, publish ---
 
 /**
- * Publish one MQTT line for an operations event. Pass the full LCOS packet; we use
- * event, source_node, data0 (uid), data1, data2. No-op for event types that don't map to MQTT.
- * Two-arg overload: no debug. Three-arg overload: when debug is true and event is turnout (2/16),
- * prints full payload (from, to, d0-d6, cr).
+ * Publish one MQTT line for an operations event. Pass the full LCOS packet.
+ *
+ * Topic suffix uses pkt->source_node and data0 (etc.) from the LCOS payload — the sender's
+ * self-reported node ID, not necessarily who you unicast in sendShortMessage, and not
+ * RF24NetworkHeader.from_node (last radio hop; see three-arg debug line: src= vs rf24=).
+ *
+ * Turnout 0 on a node is UID (UID_OFFSET_TURNOUTS + 0) = 8. UID 27 is route band (16+11), not turnout 0.
+ *
+ * Two-arg overload: no debug. Three-arg: debug true prints DBG ... src= lcos_source rf24= last_hop to= ...
  */
 void mqttPublishOperationEvent(Print &out, const struct DATAGRAM *pkt);
 void mqttPublishOperationEvent(Print &out, const struct DATAGRAM *pkt, bool debug);
