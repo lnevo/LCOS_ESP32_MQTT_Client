@@ -7,7 +7,8 @@
 
 #include <Arduino.h>
 #include <lcos.h>
-#include "gateways.h"
+
+class gateway;
 
 #define MQTT_BRIDGE_SYS_ID "LCOS MQTT bridge (JMRI) — subscriptions to nodes 4, 3, 13"
 

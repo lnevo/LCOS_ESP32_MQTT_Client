@@ -3,6 +3,7 @@
  */
 #include <string.h>
 #include "lcos_mqtt_bridge.h"
+#include "gateways.h"
 
 // --- MASTER Event Distributor (event 125) subscription masks ---
 #define INCLUDE_NODE_EVENTS         1
