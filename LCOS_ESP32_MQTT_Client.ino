@@ -4,7 +4,7 @@
  * System Version 1.0
  * Protocol Version 1.0
  * Library Version 1.0
- * Bare Client Node for LCOS Networks
+ * Bare Client Node for LCOS Networks, v 1.10 (see reference/LCOS_Client_Bare.ino)
  *
  * Global Variables Created and Used by LCOS Library:
  * RF24 radio; 

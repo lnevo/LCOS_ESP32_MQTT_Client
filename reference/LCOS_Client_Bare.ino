@@ -4,7 +4,7 @@
  * System Version 1.0
  * Protocol Version 1.0
  * Library Version 1.0
- * Bare Client Node for LCOS Networks
+ * Bare Client Node for LCOS Networks, v 1.10
  *
  * Global Variables Created and Used by LCOS Library:
  * RF24 radio; 
@@ -12,17 +12,31 @@
  *
  */
 
+/////////////////////////////////////////////////
+// Event subsciptions masking values
+#define INCLUDE_NODE_EVENTS 1
+#define INCLUDE_TURNOUT_EVENTS 2
+#define INCLUDE_SIGNAL_EVENTS 4
+#define INCLUDE_BLOCK_EVENTS 8
+#define INCLUDE_CROSSING_EVENTS 16
+#define INCLUDE_TURNTABLE_EVENTS 32
+#define INCLUDE_SCENE_EVENTS 64
+#define INCLUDE_TRACK_POWER_EVENTS 128
+#define INCLUDE_BUTTON_EVENTS 1024
+#define INCLUDE_SWITCH_EVENTS 2048
+#define INCLUDE_SENSOR_EVENTS 4096
+/////////////////////////////////////////////////
 /***********************************************
  * Header files
  */
 #include <lcos.h>
 #include "gateways.h"
 #define ADDRESS_SERIAL 0xFFFF
-#define SYS_ID "LCOS Custom Client Node"
+#define SYS_ID "LCOS Custom Client Node Subscription Demo"
 
 // Basic Configuration Items
-byte channel = 75;
-uint16_t thisNode = 05;
+byte channel = 90;
+uint16_t thisNode = 01;
 byte childMap = 0;
 byte configType = CONFIG_TYPE_CUSTOM_CLIENT;
 
@@ -32,6 +46,7 @@ gateway *serial_gw;
 byte opMode = OP_MODE_NORMAL;
 byte errCode = 0;
 void setup() {
+  DATAGRAM out;
   // Create layout object
   layout = new lcos_layout(channel, thisNode, childMap);
   layout->setNodeType(configType);
@@ -48,9 +63,43 @@ void setup() {
   serial_gw = new gateway(3, ADDRESS_SERIAL);
   LCMNetwork *net = layout->getNetworkObject();
   Serial.println(LIBVERSION);
+  Serial.println(SYS_ID);
   Serial.print(F("@<0"));
   Serial.print(net->getNodeID(), OCT);
   Serial.println(F(">"));
+  
+  layout->update(); 
+
+  // Sample messages requesting a subscription to notications emitted by a single node
+  // messages are sent to the Event Distributor process on the MASTER. The Event Distributor
+  // arbitrates all subscription requests and distributes events to subscribers.
+  uint16_t target = 5; // The node whose events you are interested in
+  // Bitwise OR event selectors for the events you want to follow
+  uint16_t event_mask = INCLUDE_BUTTON_EVENTS | INCLUDE_SWITCH_EVENTS | INCLUDE_BLOCK_EVENTS | INCLUDE_TURNOUT_EVENTS;
+  out.source_node = thisNode;
+  out.to_node = 0;
+  out.event_type = ETYPE_OPERATING;
+  out.event = 125;
+  out.data0 = highByte(event_mask);
+  out.data1 = lowByte(event_mask);
+  out.data2 = highByte(target);
+  out.data3 = lowByte(target);
+  out.data4 = 0;
+  out.data5 = 0;
+  out.data6 = 0;
+  out.cmd_response = 0;
+  net->emitEvent(false, 0, &out);
+  // update the network after emitting the event
+  layout->update(); 
+  // each node you are interested in following is subscribed to separately
+  target = 2;
+  event_mask = INCLUDE_BLOCK_EVENTS | INCLUDE_TURNOUT_EVENTS | INCLUDE_SIGNAL_EVENTS;
+  out.data0 = highByte(event_mask);
+  out.data1 = lowByte(event_mask);
+  out.data2 = highByte(target);
+  out.data3 = lowByte(target);
+  net->emitEvent(false, 0, &out);
+  layout->update(); 
 }
 
 void loop(){
@@ -91,8 +140,6 @@ void loop(){
   // Operations
   //////////////////////////////////////////////// 
 
-
-
 }// end loop()
 
 ////////////////////////////////////////////////
@@ -103,8 +150,8 @@ void handleOperationsEvents(DATAGRAM *pkt){
   extern lcos_layout *layout;
   LCMNetwork *layoutNet;
   DATAGRAM out;
+  boolean sendResponse = false;
   layoutNet = layout->getNetworkObject();
-  
   switch(pkt->event){
     case 1: // node status event
       break;
@@ -127,8 +174,20 @@ void handleOperationsEvents(DATAGRAM *pkt){
     case 10: //reserved
       break;
     case 11: // button status event
+      Serial.print("BTN Node: ");
+      Serial.print(pkt->source_node);
+      Serial.print(" UID: ");
+      Serial.print(pkt->data0);
+      Serial.print(" State: ");
+      Serial.println(pkt->data1);
       break;
     case 12: // switch contact status event
+      Serial.print("SWC Node: ");
+      Serial.print(pkt->source_node);
+      Serial.print(" UID: ");
+      Serial.print(pkt->data0);
+      Serial.print(" State: ");
+      Serial.println(pkt->data1);
       break;
     case 13: // reserved
       break;
@@ -152,8 +211,18 @@ void handleOperationsEvents(DATAGRAM *pkt){
       break;
     case 23: // Global Route Command
       break;
+    case 125: // response to subscription requests
+      if(pkt->data6 == 1){
+        Serial.print(F("Subscription accepted - node: "));
+        Serial.println((pkt->data2 << 8) + pkt->data3 , OCT);
+      } else {
+        Serial.print(F("Subscription declined - node: "));
+        Serial.println((pkt->data2 << 8) + pkt->data3 , OCT);
+      }
   }
-  if(pkt->broadcast == 0){ // respond ACK to node-to-node messages
+  // Required Change: nodes should not generally respond to OPS events
+  // except under special circumstances. 
+  if(sendResponse){ // respond if necessary
     out.source_node = layoutNet->getNodeID();
     out.to_node = pkt->source_node;
     out.event_type = ETYPE_OPERATING;

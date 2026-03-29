@@ -1,6 +1,6 @@
 /**
  * LCOS JMRI/MQTT bridge — subscriptions, serial text/binary routing, heartbeat command.
- * Keep LCOS_ESP32_MQTT_Client.ino aligned with reference/LCOS_Client_Bare.ino; customize here.
+ * Keep LCOS_ESP32_MQTT_Client.ino aligned with reference/LCOS_Client_Bare.ino (Beagle Bay v1.10); customize here.
  */
 #ifndef LCOS_MQTT_BRIDGE_H
 #define LCOS_MQTT_BRIDGE_H
