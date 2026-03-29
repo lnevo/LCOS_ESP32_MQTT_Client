@@ -23,10 +23,11 @@
 static const uint16_t kSubscribeTargets[] = { 4, 3, 13 };
 
 // --- Serial text: heartbeat from Python (serial_to_mqtt.py) ---
-// Packed JMRI 410 = node 4, turnout UID 10 -> CLOSED on PING (ACK always sent first).
+// JMRI track/turnout/410 = node 4 + LCOS turnout data0 UID 10 (see mqtt_serial / UID_OFFSET_TURNOUTS).
+// Command must match README sendShortMessage turnout examples: multicast to master, data1 0=CLOSED 1=THROWN,
+// responding_to 0 for a new command (not 0x01/0x2 LCOS-style in data1; not cmd_response=function here).
 #define HB_SERIAL_TOKEN "PING"
-#define HB_TURNOUT_NODE 4
-#define HB_TURNOUT_UID 10
+#define HB_TURNOUT_LCOS_UID 10
 
 static char s_serialLineBuf[128];
 static size_t s_serialLineLen = 0;
@@ -60,8 +61,8 @@ static void pollSerialTextLineForAck(lcos_layout *layout) {
         Serial.print(F("ACK "));
         Serial.println(s_serialLineBuf);
         if (layout != NULL && strcmp(s_serialLineBuf, HB_SERIAL_TOKEN) == 0) {
-          layout->sendShortMessage(false, HB_TURNOUT_NODE, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
-            (byte)HB_TURNOUT_UID, 0x01, 0, CMD_FUNC_SET_NO_LOCK);
+          layout->sendShortMessage(true, 0, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
+            (byte)HB_TURNOUT_LCOS_UID, 0, 0, 0);  // README: multicast, data1 0=CLOSED
           layout->update();
         }
       }

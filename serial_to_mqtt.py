@@ -6,7 +6,7 @@ Arduino sends one line per message:  <topic><space><payload>\\n  (LF only).
 Topics must start with "track". Publishes use retain=True (same idea as mosquitto_pub -r).
 
 Optional debug heartbeat: every HEARTBEAT_INTERVAL_SEC, send HEARTBEAT_SERIAL_LINE to serial;
-Arduino ACKs and (for "PING") sends LCOS turnout command: node 4, UID 10 (JMRI 410) -> CLOSED.
+Arduino ACKs and (for "PING") sends turnout CLOSED via sendShortMessage (multicast, data1=0, UID 10 / JMRI 410).
 We publish the "ACK ..." line to HEARTBEAT_MQTT_TOPIC (see DEBUG_HEARTBEAT).
 
 Usage (Windows):

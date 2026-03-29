@@ -271,6 +271,8 @@ Lock/release for signals is not yet implemented; for turnouts it is only partial
 - **Turnouts:** `0x1` = Align closed/main, `0x2` = Align thrown/divergent, `0x3` = Toggle.
 - **Signals:** `0x0` = OFF, `0x1` = Stop, `0x2` = Clear, `0x3` = Approach/Caution.
 
+**`sendShortMessage` vs wire encoding:** Examples in this repo use turnout commands with **data1 `0` = CLOSED, `1` = THROWN** (last parameter `responding_to = 0` for new commands). That differs from the formal `0x1`/`0x2` table above—use **0/1** to match `README` `sendShortMessage` examples and `broadcastOpState`-style traffic. Incoming **status** (`EVENT_TURNOUT`) from nodes is mapped in `mqtt_serial.cpp` as **data1 1 → CLOSED, 2 → THROWN** on the wire.
+
 ### UID Offsets for CTC Objects
 
 LCOS uses predefined UID ranges for different object types:
