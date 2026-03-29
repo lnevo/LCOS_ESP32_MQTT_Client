@@ -62,6 +62,15 @@ static void pollSerialTextLineForAck(lcos_layout *layout) {
         Serial.print(F("ACK "));
         Serial.println(s_serialLineBuf);
         if (layout != NULL && strcmp(s_serialLineBuf, HB_SERIAL_TOKEN) == 0) {
+          Serial.print(F("[HB "));
+          Serial.print(F(HB_SERIAL_TOKEN));
+          Serial.print(F("] sendShortMessage pkt: mcast=1 to_node=0 etype="));
+          Serial.print((unsigned)ETYPE_OPERATING);
+          Serial.print(F(" event="));
+          Serial.print((unsigned)EVENT_TURNOUT_CMD);
+          Serial.print(F(" data0(uid)="));
+          Serial.print((unsigned)HB_TURNOUT_LCOS_UID);
+          Serial.println(F(" data1=0(CLOSED) data2=0 data3=0"));
           layout->sendShortMessage(true, 0, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
             (byte)HB_TURNOUT_LCOS_UID, 0, 0, 0);  // README: multicast, data1 0=CLOSED
           layout->update();
