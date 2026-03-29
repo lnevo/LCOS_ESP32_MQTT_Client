@@ -22,11 +22,11 @@ import time
 import serial
 import paho.mqtt.client as mqtt
 
-# paho-mqtt 2.x requires callback_api_version; 1.x does not
+# paho-mqtt 2.x: use callback API v2 (v1 is deprecated). paho-mqtt 1.x has no CallbackAPIVersion.
 def _make_mqtt_client() -> mqtt.Client:
     try:
         return mqtt.Client(
-            callback_api_version=mqtt.CallbackAPIVersion.VERSION1,
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
             protocol=mqtt.MQTTv311,
         )
     except (AttributeError, TypeError):
