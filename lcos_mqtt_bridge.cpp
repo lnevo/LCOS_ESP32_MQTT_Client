@@ -4,6 +4,7 @@
 #include <string.h>
 #include "lcos_mqtt_bridge.h"
 #include "gateways.h"
+#include "mqtt_serial.h"
 
 // --- MASTER Event Distributor (event 125) subscription masks ---
 #define INCLUDE_NODE_EVENTS         1
@@ -66,6 +67,9 @@ static void pollSerialTextLineForAck(lcos_layout *layout) {
           layout->sendShortMessage(false, HB_TURNOUT_NODE, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
             (byte)HB_TURNOUT_UID, 1, 0, 0x02);
           layout->update();
+          /* Subscription traffic often reports source_node/data0 of the *reporter* (e.g. 4/27), not the
+             commanded turnout. Emit one line at the HB JMRI address so serial_to_mqtt matches panel (308). */
+          mqttPublishTurnoutAt(Serial, HB_TURNOUT_NODE, (byte)HB_TURNOUT_UID, "CLOSED");
         }
       }
       s_serialLineLen = 0;
