@@ -69,6 +69,34 @@ static void subscribeToNode(LCMNetwork *net, uint16_t targetNode, uint16_t event
   net->emitEvent(false, 0, &out);
 }
 
+// Serial input: LCOS binary gateway packets start with broadcast byte 0 or 1 (first byte of DATAGRAM).
+// Any other first byte is treated as a text line (Serial Monitor) until LF; we ACK for testing.
+static char s_serialLineBuf[128];
+static size_t s_serialLineLen = 0;
+
+static void pollSerialTextLineForAck() {
+  while (Serial.available()) {
+    char ch = (char)Serial.read();
+    if (ch == '\r') {
+      continue;
+    }
+    if (ch == '\n') {
+      s_serialLineBuf[s_serialLineLen] = '\0';
+      if (s_serialLineLen > 0) {
+        Serial.print(F("ACK "));
+        Serial.println(s_serialLineBuf);
+      }
+      s_serialLineLen = 0;
+      return;
+    }
+    if (s_serialLineLen < sizeof(s_serialLineBuf) - 1) {
+      s_serialLineBuf[s_serialLineLen++] = (uint8_t)ch;
+    } else {
+      s_serialLineLen = 0;
+    }
+  }
+}
+
 void setup() {
   // Create layout object
   layout = new lcos_layout(channel, thisNode, childMap);
@@ -112,27 +140,26 @@ void loop(){
   ///////////////////////////////////////////////
   layout->update(); 
 
-  // Serial communications
-  if(serial_gw != NULL && serial_gw->isEnabled()){
-    if(serial_gw->isReadable() && Serial.available()){
+  // Serial: LCOS binary packets start with byte 0 or 1 (broadcast). Anything else = text line (Serial Monitor).
+  if (Serial.available()) {
+    int first = Serial.peek();
+    if ((first == 0 || first == 1) && serial_gw != NULL && serial_gw->isEnabled() && serial_gw->isReadable()) {
       uint8_t count = Serial.readBytes(serialBuffer, PACKET_SIZE);
-      if(count > 0){
+      if (count > 0) {
         net->parseMessage(serialBuffer, &pkt);
         pkt.source_node = serial_gw->getAddress();
-        // broadcast and messages for other nodes
-        if(pkt.broadcast || pkt.to_node != net->getNodeID()){ 
-          // if serial gateway is enabled, perform gateway function and forward messages
-          if(serial_gw->isEnabled()){
-            net->emitEvent(serialBuffer[0],  pkt.to_node, &pkt);
+        if (pkt.broadcast || pkt.to_node != net->getNodeID()) {
+          if (serial_gw->isEnabled()) {
+            net->emitEvent(serialBuffer[0], pkt.to_node, &pkt);
           }
-        } 
-        // broadcast and messages for this nodes
-        if(pkt.broadcast || pkt.to_node == net->getNodeID()){ 
-          // process serial messages for this node
+        }
+        if (pkt.broadcast || pkt.to_node == net->getNodeID()) {
           pkt.from_node = pkt.source_node;
           net->processSerialEvent(&pkt);
         }
       }
+    } else {
+      pollSerialTextLineForAck();
     }
   }
   ////////////////////////////////////////////////

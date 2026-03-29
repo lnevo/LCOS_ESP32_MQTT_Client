@@ -11,11 +11,6 @@
 
 #include <Arduino.h>
 
-// When 0 (default): LCOS → serial/MQTT only (read-only bridge). When 1: also parse incoming
-// serial lines and forward commands into LCOS (implemented incrementally on this branch).
-#ifndef MQTT_SERIAL_BIDIRECTIONAL
-#define MQTT_SERIAL_BIDIRECTIONAL 0
-#endif
 struct DATAGRAM;  // forward decl; include lcos.h in .cpp
 
 // JMRI receive topic prefixes (append packed address via mqttTopicWithPackedAddress)
