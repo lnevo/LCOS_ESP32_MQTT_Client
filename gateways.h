@@ -4,6 +4,9 @@
 // 8/30/2022
 // Copyright 2022 Beagle Bay Inc
 /////////////////////////////////////////
+#ifndef LCOS_GATEWAYS_H
+#define LCOS_GATEWAYS_H
+
 #define MAX_GATEWAYS 2
 //////////////////////////////////
 // CLASS gateway
@@ -109,3 +112,5 @@ class gateway_manager{
       return 0;
     }
 };
+
+#endif /* LCOS_GATEWAYS_H */
