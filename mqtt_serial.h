@@ -45,9 +45,6 @@ uint16_t mqttPackedAddress(uint16_t node, byte uid);
  */
 char *mqttTopicWithPackedAddress(char *buf, size_t bufSize, const char *prefix, uint16_t node, byte uid);
 
-/** One MQTT line: track/turnout/<node*100+uid> <payload> (for explicit JMRI addressing). */
-void mqttPublishTurnoutAt(Print &out, uint16_t node, byte uid, const char *payload);
-
 // --- JMRI payload conversion (exact strings per SERIAL OUTPUT PROTOCOL) ---
 
 /** Turnout: data1 0 → "CLOSED", else → "THROWN" */

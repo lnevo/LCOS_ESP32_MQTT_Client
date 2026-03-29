@@ -25,15 +25,6 @@ char *mqttTopicWithPackedAddress(char *buf, size_t bufSize, const char *prefix, 
   return buf;
 }
 
-void mqttPublishTurnoutAt(Print &out, uint16_t node, byte uid, const char *payload) {
-  if (payload == nullptr) {
-    return;
-  }
-  char topic[40];
-  mqttTopicWithPackedAddress(topic, sizeof(topic), MQTT_TOPIC_TURNOUT, node, uid);
-  mqttPublish(out, topic, payload);
-}
-
 const char *turnoutStateToPayload(byte data1) {
   /* JMRI: 0 = CLOSED, 1 = THROWN. If your node uses the opposite, swap the strings. */
   return data1 == 0 ? "CLOSED" : "THROWN";
