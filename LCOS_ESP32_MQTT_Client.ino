@@ -33,6 +33,7 @@
 /***********************************************
  * Header files
  */
+#include <string.h>
 #include <lcos.h>
 #include "gateways.h"
 #include "mqtt_serial.h"
@@ -71,6 +72,12 @@ static void subscribeToNode(LCMNetwork *net, uint16_t targetNode, uint16_t event
 
 // Serial input: LCOS binary gateway packets start with broadcast byte 0 or 1 (first byte of DATAGRAM).
 // Any other first byte is treated as a text line (Serial Monitor) until LF; we ACK for testing.
+// Heartbeat: Python sends "PING" (see serial_to_mqtt_phase_a.py). We ACK, then command turnout 410
+// CLOSED: packed 410 = node*100+uid -> node 4, turnout UID 10. If already CLOSED, node no-ops; ACK still sent.
+#define HB_SERIAL_TOKEN "PING"
+#define HB_TURNOUT_NODE 4
+#define HB_TURNOUT_UID 10
+
 static char s_serialLineBuf[128];
 static size_t s_serialLineLen = 0;
 
@@ -85,6 +92,12 @@ static void pollSerialTextLineForAck() {
       if (s_serialLineLen > 0) {
         Serial.print(F("ACK "));
         Serial.println(s_serialLineBuf);
+        if (layout != NULL && strcmp(s_serialLineBuf, HB_SERIAL_TOKEN) == 0) {
+          // Turnout command: set closed/main without lock (LCOS API: data1 0x1 = closed, cmd_response = set no lock)
+          layout->sendShortMessage(false, HB_TURNOUT_NODE, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
+            (byte)HB_TURNOUT_UID, 0x01, 0, CMD_FUNC_SET_NO_LOCK);
+          layout->update();
+        }
       }
       s_serialLineLen = 0;
       return;
