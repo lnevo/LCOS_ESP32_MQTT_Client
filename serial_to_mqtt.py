@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Phase A: Serial -> MQTT only (read-only bridge, matches serial_to_mqtt.ps1 read path).
+Serial <-> LCOS MQTT bridge (read path): COM lines from Arduino -> MQTT publish (retained).
 
 Arduino sends one line per message:  <topic><space><payload>\\n  (LF only).
-We publish each line to the MQTT broker with retain=True (same as mosquitto_pub -r).
+Topics must start with "track". Publishes use retain=True (same idea as mosquitto_pub -r).
 
 Optional debug heartbeat: every HEARTBEAT_INTERVAL_SEC, send HEARTBEAT_SERIAL_LINE to serial;
 Arduino ACKs and (for "PING") sends LCOS turnout command: node 4, UID 10 (JMRI 410) -> CLOSED.
 We publish the "ACK ..." line to HEARTBEAT_MQTT_TOPIC (see DEBUG_HEARTBEAT).
 
 Usage (Windows):
-  python serial_to_mqtt_phase_a.py --com COM3 --broker 192.168.137.1
+  python serial_to_mqtt.py --com COM3 --broker 192.168.137.1
   run_serial_mqtt.cmd
   run_serial_mqtt_debug.cmd
 
@@ -94,7 +94,6 @@ def main() -> int:
 
     client.loop_start()
 
-    # Same sanity check as PowerShell script
     try:
         info = client.publish("track/test", "ping", qos=1, retain=False)
         if hasattr(info, "wait_for_publish"):
@@ -108,7 +107,7 @@ def main() -> int:
         return 1
 
     print(f"Connected to MQTT broker at {args.broker}")
-    print(f"Opening {args.com} @ {args.baud} baud — Serial -> MQTT (Phase A). Ctrl+C to stop.")
+    print(f"Opening {args.com} @ {args.baud} baud — Serial -> MQTT. Ctrl+C to stop.")
     if heartbeat_on:
         print(
             f"Debug heartbeat ON: every {HEARTBEAT_INTERVAL_SEC:g}s send {HEARTBEAT_SERIAL_LINE!r} "
