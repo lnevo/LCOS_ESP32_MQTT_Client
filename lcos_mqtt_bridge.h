@@ -1,6 +1,8 @@
 /**
  * LCOS JMRI/MQTT bridge — subscriptions, serial text/binary routing, heartbeat command.
- * Keep LCOS_ESP32_MQTT_Client.ino aligned with reference/LCOS_Client_Bare.ino; customize here.
+ * Base sketch structure follows reference/LCOS_Client_Bare.ino (Beagle Bay v1.10 sample).
+ * Differences: mqtt_serial publish, bridge subscription targets/mask, binary-vs-text serial,
+ * and PING→turnout 410 (see .cpp). Reference demo prints BTN/SWC to Serial; we publish MQTT.
  */
 #ifndef LCOS_MQTT_BRIDGE_H
 #define LCOS_MQTT_BRIDGE_H
