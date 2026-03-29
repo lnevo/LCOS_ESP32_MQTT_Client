@@ -30,6 +30,18 @@ const char *turnoutStateToPayload(byte data1) {
   return data1 == 0 ? "CLOSED" : "THROWN";
 }
 
+/** Map LCOS turnout data1 to JMRI payload strings (track/turnout/...). */
+static const char *turnoutLcOsData1ToJmriPayload(byte data1) {
+  /* lcos.h: 0x1 closed/main, 0x2 thrown, 0x3 toggle. Multicast turnout CMD echoes often use data1==0 for closed. */
+  if (data1 == 2) {
+    return "THROWN";
+  }
+  if (data1 == 1 || data1 == 0) {
+    return "CLOSED";
+  }
+  return "THROWN";
+}
+
 const char *sensorStateToPayload(byte data1) {
   return data1 == 0 ? "INACTIVE" : "ACTIVE";
 }
@@ -124,8 +136,7 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
     case EV_TURNOUT:
     case EV_TURNOUT_CMD:
       prefix = MQTT_TOPIC_TURNOUT;
-      /* Node sends data1=1 for CLOSED, data1=2 for THROWN; map to JMRI 0=CLOSED 1=THROWN */
-      payload = turnoutStateToPayload((data1 == 1) ? 0 : 1);
+      payload = turnoutLcOsData1ToJmriPayload(data1);
       break;
     case EV_SIGNAL:
     case EV_SIGNAL_CMD:

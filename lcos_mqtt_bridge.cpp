@@ -61,8 +61,9 @@ static void pollSerialTextLineForAck(lcos_layout *layout) {
         Serial.print(F("ACK "));
         Serial.println(s_serialLineBuf);
         if (layout != NULL && strcmp(s_serialLineBuf, HB_SERIAL_TOKEN) == 0) {
-          layout->sendShortMessage(false, HB_TURNOUT_NODE, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
-            (byte)HB_TURNOUT_UID, 0x01, 0, CMD_FUNC_SET_NO_LOCK);
+          /* Multicast turnout CMD: dest 0, data1=0 CLOSED, cmd_response=0 (matches LCOS README / master distributor). */
+          layout->sendShortMessage(true, 0, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
+            (byte)HB_TURNOUT_UID, 0, 0, 0);
           layout->update();
         }
       }
