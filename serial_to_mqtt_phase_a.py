@@ -5,9 +5,13 @@ Phase A: Serial -> MQTT only (read-only bridge, matches serial_to_mqtt.ps1 read 
 Arduino sends one line per message:  <topic><space><payload>\\n  (LF only).
 We publish each line to the MQTT broker with retain=True (same as mosquitto_pub -r).
 
+Optional debug heartbeat: every HEARTBEAT_INTERVAL_SEC, send HEARTBEAT_SERIAL_LINE to serial;
+Arduino replies with "ACK ..." which we publish to HEARTBEAT_MQTT_TOPIC (see DEBUG_HEARTBEAT).
+
 Usage (Windows):
   python serial_to_mqtt_phase_a.py --com COM3 --broker 192.168.137.1
-  python serial_to_mqtt_phase_a.py --com COM3 --broker 192.168.137.1 --verbose
+  run_serial_mqtt.cmd
+  run_serial_mqtt_debug.cmd
 
 Requires: pip install pyserial paho-mqtt
 """
@@ -38,6 +42,15 @@ DEFAULT_BAUD = 115200
 DEFAULT_BROKER = "192.168.137.1"
 DEFAULT_MQTT_PORT = 1883
 
+# --- Debug heartbeat (serial ping + publish Arduino "ACK ..." line to MQTT) ---
+# Set True here, or pass --debug-heartbeat on the command line (either enables the feature).
+DEBUG_HEARTBEAT = False
+HEARTBEAT_INTERVAL_SEC = 10.0
+# Text line sent to serial (LF-terminated). Arduino must treat as text (not binary 0/1).
+HEARTBEAT_SERIAL_LINE = b"PING\n"
+# MQTT topic for the raw serial reply (e.g. "ACK PING").
+HEARTBEAT_MQTT_TOPIC = "track/bridge/heartbeat"
+
 
 def parse_line(line: str) -> tuple[str, str] | None:
     line = line.strip("\r\n")
@@ -62,7 +75,14 @@ def main() -> int:
     ap.add_argument("--broker", "-H", default=DEFAULT_BROKER, help=f"MQTT broker host (default {DEFAULT_BROKER})")
     ap.add_argument("--mqtt-port", type=int, default=DEFAULT_MQTT_PORT, help=f"MQTT port (default {DEFAULT_MQTT_PORT})")
     ap.add_argument("--verbose", "-v", action="store_true", help="Print each publish to stdout")
+    ap.add_argument(
+        "--debug-heartbeat",
+        action="store_true",
+        help="Enable serial heartbeat + MQTT publish of ACK replies (or set DEBUG_HEARTBEAT = True in script)",
+    )
     args = ap.parse_args()
+
+    heartbeat_on = bool(DEBUG_HEARTBEAT or args.debug_heartbeat)
 
     client = _make_mqtt_client()
     try:
@@ -88,6 +108,11 @@ def main() -> int:
 
     print(f"Connected to MQTT broker at {args.broker}")
     print(f"Opening {args.com} @ {args.baud} baud — Serial -> MQTT (Phase A). Ctrl+C to stop.")
+    if heartbeat_on:
+        print(
+            f"Debug heartbeat ON: every {HEARTBEAT_INTERVAL_SEC:g}s send {HEARTBEAT_SERIAL_LINE!r} "
+            f"-> serial; publish replies to {HEARTBEAT_MQTT_TOPIC!r}"
+        )
 
     stop = False
 
@@ -114,9 +139,19 @@ def main() -> int:
         client.disconnect()
         return 1
 
+    last_heartbeat = time.monotonic()
+
     try:
         while not stop:
             try:
+                now = time.monotonic()
+                if heartbeat_on and (now - last_heartbeat) >= HEARTBEAT_INTERVAL_SEC:
+                    ser.write(HEARTBEAT_SERIAL_LINE)
+                    ser.flush()
+                    last_heartbeat = now
+                    if args.verbose:
+                        print(f"HB -> serial {HEARTBEAT_SERIAL_LINE!r}")
+
                 raw = ser.readline()
                 if not raw:
                     continue
@@ -124,14 +159,20 @@ def main() -> int:
                     line = raw.decode("utf-8", errors="replace")
                 except Exception:
                     continue
+                stripped = line.strip("\r\n")
+
                 parsed = parse_line(line)
-                if parsed is None:
+                if parsed is not None:
+                    topic, payload = parsed
+                    client.publish(topic, payload, qos=0, retain=True)
+                    if args.verbose:
+                        print(f"TX -> {topic} {payload}")
                     continue
-                topic, payload = parsed
-                info = client.publish(topic, payload, qos=0, retain=True)
-                if args.verbose:
-                    print(f"TX -> {topic} {payload}")
-                # Optional: info.wait_for_publish(1.0) if you need back-pressure
+
+                if heartbeat_on and stripped.startswith("ACK "):
+                    client.publish(HEARTBEAT_MQTT_TOPIC, stripped, qos=0, retain=True)
+                    if args.verbose:
+                        print(f"TX -> {HEARTBEAT_MQTT_TOPIC} {stripped}")
             except serial.SerialException as e:
                 print(f"Serial error: {e}", file=sys.stderr)
                 time.sleep(0.5)
