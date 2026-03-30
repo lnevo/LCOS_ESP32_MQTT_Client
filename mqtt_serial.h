@@ -72,7 +72,8 @@ const char *signalMastStateToPayload(byte data1);
  * self-reported node ID, not necessarily who you unicast in sendShortMessage, and not
  * RF24NetworkHeader.from_node (last radio hop; see three-arg debug line: src= vs rf24=).
  *
- * Turnout 0 on a node is UID (UID_OFFSET_TURNOUTS + 0) = 8. UID 27 is route band (16+11), not turnout 0.
+ * Turnout 0 on a node is UID (UID_OFFSET_TURNOUTS + 0) = 8. EVENT_TURNOUT_CMD replies may use data0 for
+ * cmd codes (e.g. 127); we only publish CMD lines when data0 is in turnout UID range 8–15. Prefer EVENT_TURNOUT (2) for state.
  *
  * Two-arg overload: MQTT_SERIAL_OPS_DEBUG in mqtt_serial.cpp (1 = DBG on, 0 = off).
  * Three-arg: explicit debug on/off regardless of MQTT_SERIAL_OPS_DEBUG.
