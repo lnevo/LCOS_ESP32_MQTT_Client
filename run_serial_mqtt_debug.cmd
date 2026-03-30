@@ -1,5 +1,5 @@
 @echo off
-REM Verbose MQTT TX + print Arduino DBG lines from serial. No PING heartbeat (use run_serial_mqtt_heartbeat.cmd).
+REM Arduino Nano serial <-> MQTT. Verbose MQTT TX + print DBG lines. No PING (use run_serial_mqtt_heartbeat.cmd).
 cd /d "%~dp0"
 
 set "COM=COM3"

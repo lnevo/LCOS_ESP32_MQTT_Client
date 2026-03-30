@@ -4,9 +4,11 @@
 Version 1.0.9  
 Copyright 2022-26 Beagle Bay Inc
 
+**Repository note:** The project name still includes **ESP32** for historical reasons; the **JMRI/MQTT bridge sketch and host tooling** in this repository are built around an **Arduino Nano** on USB serial. LCOS itself runs on many Arduino-class boards—see [Hardware Requirements](#hardware-requirements).
+
 ### MQTT / JMRI serial bridge (Python)
 
-This repo includes **`serial_to_mqtt.py`**, which connects the ESP32/Arduino serial line to an MQTT broker. On **Windows**, install Python 3, then `pip install -r requirements.txt`; full steps and test commands are in **[docs/serial_mqtt_windows.md](docs/serial_mqtt_windows.md)**. For **Cursor / VS Code** import hints, use a repo-local **`.venv`** and **`pyproject.toml`** (see that doc).
+This repo includes **`serial_to_mqtt.py`**, which connects the **Arduino Nano** USB serial port to an MQTT broker. On **Windows**, install Python 3, then `pip install -r requirements.txt`; full steps and test commands are in **[docs/serial_mqtt_windows.md](docs/serial_mqtt_windows.md)**. For **Cursor / VS Code** import hints, use a repo-local **`.venv`** and **`pyproject.toml`** (see that doc).
 
 ## Table of Contents
 
@@ -56,7 +58,8 @@ LCOS is a distributed control system for model railroa0d layouts using nRF24L01 
 
 ### Hardware Requirements
 
-- Arduino-compatible board (Arduino Uno, ESP32, etc.)
+- **This repository:** **Arduino Nano** as the LCOS node that speaks USB serial to `serial_to_mqtt.py` (project folder name retains “ESP32” for history only).
+- **LCOS generally:** Arduino-compatible boards (Uno, Nano, ESP32, etc.)
 - nRF24L01 radio module
 - Radio pin definitions (defaults in `radio.h`):
   - `RADIO_CE`: Pin 9 (default)

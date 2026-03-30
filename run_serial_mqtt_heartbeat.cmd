@@ -1,5 +1,5 @@
 @echo off
-REM Serial PING heartbeat + MQTT publish of ACK replies + verbose TX lines.
+REM Arduino Nano serial <-> MQTT. PING heartbeat + MQTT ACK publish + verbose TX lines.
 REM Arduino DBG lines stay suppressed unless you pass --debug (see run_serial_mqtt_debug.cmd).
 cd /d "%~dp0"
 

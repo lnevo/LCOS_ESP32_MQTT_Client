@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Serial -> MQTT bridge (read-only from the Arduino's perspective: LCOS lines out, MQTT publish).
+Serial -> MQTT bridge (read-only from the LCOS node's perspective: LCOS lines out, MQTT publish).
 
-Arduino sends one line per message:  <topic><space><payload>\\n  (LF only).
+Host companion for an Arduino Nano running the LCOS JMRI/MQTT bridge sketch (repo folder name
+retains ESP32 historically). The Nano sends one line per message:  <topic><space><payload>\\n  (LF only).
 We publish each line to the MQTT broker with retain=True (same as mosquitto_pub -r).
 
 Optional debug heartbeat: every HEARTBEAT_INTERVAL_SEC, send HEARTBEAT_SERIAL_LINE to serial;

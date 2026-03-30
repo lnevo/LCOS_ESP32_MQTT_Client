@@ -1,6 +1,9 @@
 TODO: LCOS to JMRI MQTT Bridge Implementation
 ==================================================
 
+NOTE: Bridge firmware in this repo is documented for Arduino Nano (USB serial).
+      Project/repo naming may still reference ESP32 historically.
+
 PROJECT GOAL
 -----------
 Bridge messages from the LCOS network to JMRI by outputting MQTT-style messages 

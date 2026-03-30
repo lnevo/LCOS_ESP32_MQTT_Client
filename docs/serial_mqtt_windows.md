@@ -1,6 +1,6 @@
 # Serial ↔ MQTT bridge on Windows
 
-The script `serial_to_mqtt.py` relays MQTT-formatted lines between the Arduino COM port and your MQTT broker (for JMRI and testing). This page covers installing Python and dependencies on Windows.
+The script `serial_to_mqtt.py` relays MQTT-formatted lines between the **Arduino Nano** USB serial port (COM) and your MQTT broker (for JMRI and testing). The repository name still mentions ESP32 for historical reasons; this bridge is documented for a **Nano**. This page covers installing Python and dependencies on Windows.
 
 ## 1. Install Python 3
 
@@ -74,4 +74,4 @@ Use the same host/port as `--broker` / `--mqtt-port` on the script.
 
 ## Linux / macOS later
 
-Use the same `requirements.txt` after `python3 -m venv .venv`, `source .venv/bin/activate`, and `pip install -r requirements.txt`. The `.cmd` launchers are Windows-only—run `python serial_to_mqtt.py` with the right `/dev/tty.*` path. In Cursor/VS Code, select **Python: Select Interpreter** → `./.venv/bin/python` so analysis matches `pyproject.toml`.
+Use the same `requirements.txt` after `python3 -m venv .venv`, `source .venv/bin/activate`, and `pip install -r requirements.txt`. The `.cmd` launchers are Windows-only—run `python serial_to_mqtt.py` with the Arduino Nano’s USB serial device (e.g. `/dev/ttyUSB0` or `/dev/tty.usbserial-*`). In Cursor/VS Code, select **Python: Select Interpreter** → `./.venv/bin/python` so analysis matches `pyproject.toml`.

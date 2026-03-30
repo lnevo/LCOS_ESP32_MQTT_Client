@@ -6,6 +6,8 @@
  * Library Version 1.0
  * Bare Client Node for LCOS Networks, v 1.10 (see reference/LCOS_Client_Bare.ino)
  *
+ * Hardware: Arduino Nano (USB serial to PC running serial_to_mqtt.py). Repo name ESP32 is legacy.
+ *
  * Global Variables Created and Used by LCOS Library:
  * RF24 radio; 
  * RF24Network radioNet;

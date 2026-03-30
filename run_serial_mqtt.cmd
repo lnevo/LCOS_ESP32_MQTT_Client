@@ -1,5 +1,5 @@
 @echo off
-REM Quiet or verbose serial -> MQTT; no PING; Arduino DBG lines are not printed (use run_serial_mqtt_debug.cmd).
+REM Host bridge: Arduino Nano USB serial <-> MQTT. Quiet or verbose; no PING; DBG -> run_serial_mqtt_debug.cmd.
 REM Verbose (MQTT TX lines only): run_serial_mqtt.cmd verbose  |  -verbose  |  --verbose
 REM Heartbeat: run_serial_mqtt_heartbeat.cmd   |   DBG on console: run_serial_mqtt_debug.cmd
 REM Extra args pass through (e.g. --com COM5 --debug).
