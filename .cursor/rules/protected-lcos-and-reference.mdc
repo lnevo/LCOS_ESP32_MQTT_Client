@@ -1,0 +1,13 @@
+---
+description: Do not change lcos/ or reference/ without explicit maintainer instruction and confirmation
+alwaysApply: true
+---
+
+# Vendor LCOS library and reference sketches
+
+- **`lcos/`** — Beagle Bay LCOS Integration Library (`lcos.h`, `lcos.cpp`, etc.). Treat as **vendor source**: do not edit, reformat, or “fix” it unless the maintainer **explicitly asks** to change these files **and** confirms (e.g. merging an official library drop).
+- **`reference/`** — Upstream patterns (e.g. **`reference/LCOS_Client_Bare.ino`**, Beagle Bay bare client). Same rule: **no edits** without explicit request and confirmation.
+
+**Project-specific behavior** belongs in other paths (`LCOS_ESP32_MQTT_Client.ino`, `lcos_mqtt_bridge.*`, `mqtt_serial.*`, `serial_to_mqtt.py`, `docs/`, etc.).
+
+**API and protocol truth** for LCOS comes from **`lcos/lcos.h`**, **`lcos/lcos.cpp`**, and the **reference `.ino`** — not from **`README.md`**.
