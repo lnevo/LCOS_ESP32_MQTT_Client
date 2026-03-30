@@ -10,6 +10,9 @@ Arduino ACKs and sends LCOS turnout CMD (HB node/UID in firmware). Turnout MQTT 
 real layout ops events on serial (confirmation), not from a synthetic publish after PING.
 We publish the "ACK ..." line to HEARTBEAT_MQTT_TOPIC (see DEBUG_HEARTBEAT).
 
+We always subscribe to HEARTBEAT_MQTT_TOPIC: payload exactly PING is relayed to serial (same bytes as
+heartbeat). Arduino replies with ACK PING on that topic; that payload does not re-trigger serial.
+
 Usage (Windows):
   python serial_to_mqtt.py --com COM3 --broker 192.168.137.1
   run_serial_mqtt.cmd              # quiet (or: run_serial_mqtt.cmd verbose  for MQTT TX only)
@@ -22,6 +25,7 @@ Requires: pip install pyserial paho-mqtt
 from __future__ import annotations
 
 import argparse
+import queue
 import signal
 import sys
 import time
@@ -71,6 +75,13 @@ def parse_line(line: str) -> tuple[str, str] | None:
     return topic, payload
 
 
+def _mqtt_connect_ok(reason_code: object) -> bool:
+    """paho-mqtt v1: rc int 0; v2: ReasonCode with is_failure."""
+    if isinstance(reason_code, int):
+        return reason_code == 0
+    return not getattr(reason_code, "is_failure", True)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Serial (LCOS MQTT lines) -> MQTT broker")
     ap.add_argument("--com", default=DEFAULT_COM, help=f"Serial port (default {DEFAULT_COM})")
@@ -92,7 +103,44 @@ def main() -> int:
 
     heartbeat_on = bool(DEBUG_HEARTBEAT or args.debug_heartbeat)
 
+    ping_cmd_queue: queue.Queue[object] = queue.Queue(maxsize=32)
+    mqtt_heartbeat_sub_announced = False
+
     client = _make_mqtt_client()
+    client.user_data_set(ping_cmd_queue)
+
+    def on_connect(_client, _userdata, _flags, reason_code, _properties=None):
+        nonlocal mqtt_heartbeat_sub_announced
+        if not _mqtt_connect_ok(reason_code):
+            return
+        _client.subscribe(HEARTBEAT_MQTT_TOPIC, qos=1)
+        if not mqtt_heartbeat_sub_announced:
+            print(
+                f"Subscribed to {HEARTBEAT_MQTT_TOPIC!r} — MQTT payload PING -> serial "
+                f"{HEARTBEAT_SERIAL_LINE!r}"
+            )
+            mqtt_heartbeat_sub_announced = True
+
+    def on_message(_client, userdata, msg):
+        if msg.topic != HEARTBEAT_MQTT_TOPIC:
+            return
+        try:
+            payload = msg.payload.decode("utf-8", errors="replace").strip()
+        except Exception:
+            return
+        if payload != "PING":
+            return
+        q = userdata
+        if not isinstance(q, queue.Queue):
+            return
+        try:
+            q.put_nowait(True)
+        except queue.Full:
+            pass
+
+    client.on_connect = on_connect
+    client.on_message = on_message
+
     try:
         client.connect(args.broker, args.mqtt_port, keepalive=60)
     except OSError as e:
@@ -151,6 +199,16 @@ def main() -> int:
     try:
         while not stop:
             try:
+                while True:
+                    try:
+                        ping_cmd_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    ser.write(HEARTBEAT_SERIAL_LINE)
+                    ser.flush()
+                    if args.verbose:
+                        print(f"MQTT -> serial {HEARTBEAT_SERIAL_LINE!r}")
+
                 now = time.monotonic()
                 if heartbeat_on and (now - last_heartbeat) >= HEARTBEAT_INTERVAL_SEC:
                     ser.write(HEARTBEAT_SERIAL_LINE)
