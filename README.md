@@ -8,7 +8,7 @@ Copyright 2022-26 Beagle Bay Inc
 
 ### MQTT / JMRI serial bridge (Python)
 
-This repo includes **`serial_to_mqtt.py`**, which connects the **Arduino Nano** USB serial port to an MQTT broker. On **Windows**, install Python 3, then `pip install -r requirements.txt`; full steps and test commands are in **[docs/serial_mqtt_windows.md](docs/serial_mqtt_windows.md)**. For **Cursor / VS Code** import hints, use a repo-local **`.venv`** and **`pyproject.toml`** (see that doc).
+This repo includes **`serial_to_mqtt.py`**, which connects the **Arduino Nano** USB serial port to an MQTT broker. On **Windows**, install Python 3, then `pip install -r requirements.txt`; full steps and test commands are in **[docs/serial_mqtt_windows.md](docs/serial_mqtt_windows.md)**. For **Cursor / VS Code** import hints, use a repo-local **`.venv`** and **`pyproject.toml`** (see that doc). Work toward **JMRI-sized command support** (binary host ↔ Nano, strings only in Python) is planned in **[docs/jmri_host_protocol_plan.md](docs/jmri_host_protocol_plan.md)** (branch **`feature/jmri-host-protocol`**).
 
 ## Table of Contents
 
