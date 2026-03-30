@@ -51,10 +51,9 @@ static void pollSerialTextLineForAck(lcos_layout *layout) {
         Serial.println(s_serialLineBuf);
         if (layout != NULL && strcmp(s_serialLineBuf, HB_SERIAL_TOKEN) == 0) {
           /* Unicast to the turnout owner: multicast=true only sends to master (00) per LCMNetwork::emitEvent. */
-          /* lcos.h turnout alignment: ALIGN_MAIN/ALIGN_CLOSED = 1, ALIGN_THROWN/ALIGN_DIVERGENT = 2, etc. */
-          /* cmd_response 0x02 = set state without lock (per LCOS command table / README). */
+          /* Turnout CMD: data1 = command request, data2 = ALIGN_*; see lcos_mqtt_bridge.h / README LCOS API table. */
           layout->sendShortMessage(false, HB_TURNOUT_NODE, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
-            (byte)HB_TURNOUT_UID, (byte)ALIGN_THROWN, 0, 0x02);
+            (byte)HB_TURNOUT_UID, LCOS_CMD_SET_STATE_NO_LOCK, (byte)ALIGN_THROWN, 0);
           layout->update();
         }
       }

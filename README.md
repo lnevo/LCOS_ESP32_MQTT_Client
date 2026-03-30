@@ -262,21 +262,25 @@ void handleOperationsEvents(DATAGRAM *pkt) {
 - **Commands:** Operations Event `0x10` (Turnout Command), `0x11` (Signal Command).
 - **Status (listen):** Turnout status on Operations Event `0x2`; Signal status on Operations Event `0x3`.
 
-**Command functions** (e.g. in `cmd_response` or as specified by the protocol):
+**Outgoing `sendShortMessage` for turnout/signal CMD** (per LCOS API): `data0` = object UID; **`data1`** = command request byte (see table below, e.g. **`0x02`** = set state without lock); **`data2`** = desired turnout **alignment** (`ALIGN_*` from `lcos.h`) or signal **aspect** (`SIGNAL_*`). **`responding_to` (last argument) = `0`** for a new command (non-response). Do **not** put the command request in the `cmd_response` / `DATAGRAM::cmd_response` field when **sending** — that field is for **responses**.
 
-| Value | Meaning |
-|-------|--------|
-| `0x1` | Get State |
-| `0x2` | Set State without Lock |
-| `0x3` | Set State with Lock |
-| `0x7f` | Release Lock |
+**Command request byte** (use as **`data1`** on outgoing turnout/signal CMD). *These values are not defined as macros in stock Beagle Bay `lcos.h`; the table is the authoritative reference.* This MQTT bridge repo optionally declares the same numbers as `LCOS_CMD_*` in **`lcos_mqtt_bridge.h`** for readability.
+
+| Meaning | Value |
+|---------|--------|
+| Get State | `0x01` |
+| Set State without Lock | `0x02` |
+| Set State with Lock | `0x03` |
+| Release Lock | `0x7F` |
 
 Lock/release for signals is not yet implemented; for turnouts it is only partially implemented. Semantics are the same for both when implemented. Lock authority: MASTER has automatic lock/release rights; MASTER may delegate to another node (e.g. CTC). Whether any node can issue lock commands or only MASTER/designated is a design decision.
 
-**State options (data1) — use `lcos.h` symbol values (portable):**
+**Alignments / aspects (`data2` on outgoing CMD, or `data1` on many status packets) — `lcos.h`:**
 
-- **Turnouts:** `ALIGN_MAIN` / `ALIGN_CLOSED` = 1 (main/closed), `ALIGN_DIVERGENT` / `ALIGN_THROWN` = 2, `ALIGN_TOGGLE` / `ALIGN_ANY` = 3, `ALIGN_NONE` = 0.
+- **Turnouts:** `ALIGN_MAIN` / `ALIGN_CLOSED` = 1, `ALIGN_DIVERGENT` / `ALIGN_THROWN` = 2, `ALIGN_TOGGLE` / `ALIGN_ANY` = 3, `ALIGN_NONE` = 0.
 - **Signals:** `SIGNAL_STOP` = 1, `SIGNAL_APPROACH` = 2, `SIGNAL_CLEAR` = 3, `SIGNAL_OFF` = 4 (legacy packets may use `0` for off).
+
+**Status vs command payload shape:** `EVENT_TURNOUT` / `EVENT_SIGNAL` status frames often carry alignment/aspect in **`data1`** only. Outgoing **command** frames use **`data1` = command byte (table above), `data2` = alignment or aspect.
 
 ### UID Offsets for CTC Objects
 
@@ -345,16 +349,16 @@ Signals display aspects to control train movement.
 #### Setting Signal Aspect
 
 ```cpp
-// Set signal 5 to approach (SIGNAL_APPROACH == 2 in lcos.h)
+// Set signal 5 to approach
 layout->sendShortMessage(
   true,                    // broadcast
   0,                       // destination
   ETYPE_OPERATING,
   EVENT_SIGNAL_CMD,        // 0x11
-  UID_OFFSET_SIGNALS + 5,  // Signal UID
-  SIGNAL_APPROACH,
-  0,                       // Additional data
-  0                        // responding_to
+  UID_OFFSET_SIGNALS + 5,  // data0 = signal UID
+  0x02,                    // data1 = set state without lock (command table above)
+  SIGNAL_APPROACH,         // data2 = aspect
+  0                        // not a response
 );
 ```
 
@@ -363,15 +367,18 @@ layout->sendShortMessage(
 ```cpp
 void handleOperationsEvents(DATAGRAM *pkt) {
   switch(pkt->event) {
-    case EVENT_SIGNAL:     // 0x3 - Signal status
-    case EVENT_SIGNAL_CMD: // 0x11 - Signal command
+    case EVENT_SIGNAL:     // 0x3 — status: aspect often in data1
       {
         byte signalUID = pkt->data0;
         byte signalNumber = signalUID - UID_OFFSET_SIGNALS;
-        byte aspect = pkt->data1;
-        
-        // Update signal display
-        setSignalAspect(signalNumber, aspect);
+        setSignalAspect(signalNumber, pkt->data1);
+      }
+      break;
+    case EVENT_SIGNAL_CMD: // 0x11 — command echo: CMD in data1, aspect in data2
+      {
+        byte signalUID = pkt->data0;
+        byte signalNumber = signalUID - UID_OFFSET_SIGNALS;
+        setSignalAspect(signalNumber, pkt->data2);
       }
       break;
   }
@@ -426,16 +433,16 @@ Turnouts (switches) route trains between tracks.
 #### Setting Turnout Position
 
 ```cpp
-// Set turnout 2 to THROWN / divergent (ALIGN_THROWN == ALIGN_DIVERGENT == 2 in lcos.h)
+// Set turnout 2 to THROWN / divergent
 layout->sendShortMessage(
   true,                           // broadcast
   0,                              // destination
   ETYPE_OPERATING,
   EVENT_TURNOUT_CMD,              // 0x10
-  UID_OFFSET_TURNOUTS + 2,        // Turnout UID
-  ALIGN_THROWN,                   // not 0/1 — use ALIGN_* from lcos.h
-  0,                              // Additional data
-  0                               // responding_to
+  UID_OFFSET_TURNOUTS + 2,        // data0 = turnout UID
+  0x02,                           // data1 = set state without lock (command table above)
+  ALIGN_THROWN,                   // data2 = alignment
+  0                               // not a response
 );
 ```
 
@@ -444,15 +451,21 @@ layout->sendShortMessage(
 ```cpp
 void handleOperationsEvents(DATAGRAM *pkt) {
   switch(pkt->event) {
-    case EVENT_TURNOUT:     // 0x2 - Turnout status
-    case EVENT_TURNOUT_CMD: // 0x10 - Turnout command
+    case EVENT_TURNOUT:     // 0x2 — status: alignment usually in data1
       {
         byte turnoutUID = pkt->data0;
         byte turnoutNumber = turnoutUID - UID_OFFSET_TURNOUTS;
         byte al = pkt->data1;
         bool thrown = (al == ALIGN_THROWN || al == ALIGN_DIVERGENT || al == ALIGN_TOGGLE || al == ALIGN_ANY);
-        
-        // Update turnout position
+        setTurnoutPosition(turnoutNumber, thrown);
+      }
+      break;
+    case EVENT_TURNOUT_CMD: // 0x10 — command echo: CMD in data1, alignment in data2
+      {
+        byte turnoutUID = pkt->data0;
+        byte turnoutNumber = turnoutUID - UID_OFFSET_TURNOUTS;
+        byte al = pkt->data2;
+        bool thrown = (al == ALIGN_THROWN || al == ALIGN_DIVERGENT || al == ALIGN_TOGGLE || al == ALIGN_ANY);
         setTurnoutPosition(turnoutNumber, thrown);
       }
       break;
@@ -511,18 +524,18 @@ void activateRoute(byte routeNumber) {
   byte routeUID = UID_OFFSET_ROUTES + routeNumber;
   
   // Step 1: Set turnouts
-  layout->sendShortMessage(true, 0, ETYPE_OPERATING, 
-    EVENT_TURNOUT_CMD, UID_OFFSET_TURNOUTS + 1, ALIGN_MAIN, 0, 0);  // Turnout 1 CLOSED / main
+  layout->sendShortMessage(true, 0, ETYPE_OPERATING,
+    EVENT_TURNOUT_CMD, UID_OFFSET_TURNOUTS + 1, 0x02, ALIGN_MAIN, 0);
   
   layout->sendShortMessage(true, 0, ETYPE_OPERATING,
-    EVENT_TURNOUT_CMD, UID_OFFSET_TURNOUTS + 3, ALIGN_THROWN, 0, 0);  // Turnout 3 THROWN
+    EVENT_TURNOUT_CMD, UID_OFFSET_TURNOUTS + 3, 0x02, ALIGN_THROWN, 0);
   
   // Step 2: Set signals
   layout->sendShortMessage(true, 0, ETYPE_OPERATING,
-    EVENT_SIGNAL_CMD, UID_OFFSET_SIGNALS + 2, SIGNAL_CLEAR, 0, 0);
+    EVENT_SIGNAL_CMD, UID_OFFSET_SIGNALS + 2, 0x02, SIGNAL_CLEAR, 0);
   
   layout->sendShortMessage(true, 0, ETYPE_OPERATING,
-    EVENT_SIGNAL_CMD, UID_OFFSET_SIGNALS + 4, SIGNAL_APPROACH, 0, 0);
+    EVENT_SIGNAL_CMD, UID_OFFSET_SIGNALS + 4, 0x02, SIGNAL_APPROACH, 0);
   
   // Step 3: Broadcast route activation
   layout->sendShortMessage(true, 0, ETYPE_OPERATING,
@@ -560,10 +573,10 @@ bool sendShortMessage(
   uint16_t dest,         // Destination node (0 if multicast)
   byte et,               // Event type (ETYPE_OPERATING, etc.)
   byte event,            // Event code (EVENT_TURNOUT_CMD, etc.)
-  byte uid,              // Object UID
-  byte data1,            // Primary data
-  byte data2,            // Secondary data
-  byte responding_to     // Command being responded to (0 for new)
+  byte uid,              // data0: object UID
+  byte data1,            // For turnout/signal CMD: command byte (e.g. 0x02); else payload-dependent
+  byte data2,            // For turnout/signal CMD: ALIGN_* or SIGNAL_*; else payload-dependent
+  byte responding_to     // Use 0 for new commands; nonzero when replying to a command
 );
 ```
 
@@ -590,9 +603,9 @@ layout->sendShortMessage(
   ETYPE_OPERATING,                // operations event
   EVENT_TURNOUT_CMD,              // turnout command
   UID_OFFSET_TURNOUTS + 5,        // Turnout 5
-  ALIGN_THROWN,                   // lcos.h ALIGN_* (not legacy 0/1)
-  0,                              // no secondary data
-  0                               // not responding to another command
+  0x02,                           // set state without lock
+  ALIGN_THROWN,
+  0                               // not a response
 );
 ```
 
@@ -621,8 +634,10 @@ msg.to_node = 03;  // Destination node
 msg.event_type = ETYPE_OPERATING;
 msg.event = EVENT_TURNOUT_CMD;
 msg.data0 = UID_OFFSET_TURNOUTS + 1;
-msg.data1 = ALIGN_THROWN;  // lcos.h
-// ... set other fields
+msg.data1 = 0x02;  // set state without lock (LCOS command table)
+msg.data2 = ALIGN_THROWN;
+msg.cmd_response = 0;  // new command, not a response
+// ... set other fields (data3–data6 if needed)
 
 layout->getNetworkObject()->emitEvent(false, 03, &msg);
 ```
@@ -708,7 +723,9 @@ void loop() {
     turnoutState = !turnoutState;
     layout->sendShortMessage(true, 0, ETYPE_OPERATING,
       EVENT_TURNOUT_CMD, UID_OFFSET_TURNOUTS + 1,
-      turnoutState ? ALIGN_THROWN : ALIGN_MAIN, 0, 0);
+      0x02,  // set state without lock
+      turnoutState ? ALIGN_THROWN : ALIGN_MAIN,
+      0);
     lastToggle = millis();
   }
 }
@@ -736,7 +753,7 @@ void handleOperationsEvents(DATAGRAM *pkt) {
       // Block occupied - set signal to stop
       layout->sendShortMessage(true, 0, ETYPE_OPERATING,
         EVENT_SIGNAL_CMD, UID_OFFSET_SIGNALS + blockNumber,
-        SIGNAL_STOP, 0, 0);  // lcos.h SIGNAL_STOP
+        0x02, SIGNAL_STOP, 0);
     }
   }
 }
@@ -765,11 +782,11 @@ void activateRoute(byte routeNum) {
   for (int i = 0; i < 2; i++) {
     layout->sendShortMessage(true, 0, ETYPE_OPERATING,
       EVENT_TURNOUT_CMD, route1[i].turnoutUID,
-      route1[i].turnoutState, 0, 0);
+      0x02, route1[i].turnoutState, 0);
       
     layout->sendShortMessage(true, 0, ETYPE_OPERATING,
       EVENT_SIGNAL_CMD, route1[i].signalUID,
-      route1[i].signalAspect, 0, 0);
+      0x02, route1[i].signalAspect, 0);
   }
   
   // Broadcast route activation
