@@ -33,15 +33,23 @@ import time
 import serial
 import paho.mqtt.client as mqtt
 
-# paho-mqtt 2.x: use callback API v2 (v1 is deprecated). paho-mqtt 1.x has no CallbackAPIVersion.
+try:
+    from paho.mqtt.enums import CallbackAPIVersion as _CallbackAPIVersion
+    _CALLBACK_API_V2 = _CallbackAPIVersion.VERSION2
+except ImportError:
+    _CALLBACK_API_V2 = None  # paho-mqtt 1.x
+
+# paho-mqtt 2.x: callback API v2 (v1 deprecated). 1.x: no enums module; Client() without it.
 def _make_mqtt_client() -> mqtt.Client:
-    try:
-        return mqtt.Client(
-            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-            protocol=mqtt.MQTTv311,
-        )
-    except (AttributeError, TypeError):
-        return mqtt.Client(protocol=mqtt.MQTTv311)
+    if _CALLBACK_API_V2 is not None:
+        try:
+            return mqtt.Client(
+                callback_api_version=_CALLBACK_API_V2,
+                protocol=mqtt.MQTTv311,
+            )
+        except (AttributeError, TypeError):
+            pass
+    return mqtt.Client(protocol=mqtt.MQTTv311)
 
 
 DEFAULT_COM = "COM3"
@@ -176,8 +184,9 @@ def main() -> int:
         stop = True
 
     signal.signal(signal.SIGINT, on_sigint)
-    if hasattr(signal, "SIGBREAK"):
-        signal.signal(signal.SIGBREAK, on_sigint)
+    _sigbreak = getattr(signal, "SIGBREAK", None)
+    if _sigbreak is not None:
+        signal.signal(_sigbreak, on_sigint)
 
     try:
         ser = serial.Serial(
