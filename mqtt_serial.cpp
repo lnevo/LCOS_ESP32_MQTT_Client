@@ -141,14 +141,7 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
 
   switch (event) {
     case EV_TURNOUT:
-      prefix = MQTT_TOPIC_TURNOUT;
-      payload = turnoutLcOsData1ToJmriPayload(data1);
-      break;
     case EV_TURNOUT_CMD:
-      /* CMD acks often put function codes in data0 (e.g. 0x7f=127), not turnout UID — topic would be wrong (e.g. 3*100+127=427). */
-      if (uid < UID_OFFSET_TURNOUTS || uid > UID_OFFSET_TURNOUTS + 7) {
-        return;
-      }
       prefix = MQTT_TOPIC_TURNOUT;
       payload = turnoutLcOsData1ToJmriPayload(data1);
       break;
