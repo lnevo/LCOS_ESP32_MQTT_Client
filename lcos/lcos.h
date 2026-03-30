@@ -1,7 +1,6 @@
 /////////////////////////////////////////
 // LCOS.h
-// @VERSION 1.0.9
-// 1.8.26
+// @VERSION 1.0.10
 // Arduino library for LCOS Integration, version 1.0
 // LCOS Version 1.0
 // LCOS Protocol v1.0
@@ -14,8 +13,8 @@
 int freeMemory();
 #define LIBMAJORV 1
 #define LIBMINORV 0
-#define LIBBUILD 9
-#define LIBVERSION "LCOS Integration Library, ver 1.0.9"
+#define LIBBUILD 10
+#define LIBVERSION "LCOS Integration Library, ver 1.0.10"
 
 #ifdef __arm__
 // could use uinstd.h to define sbrk but Due causes a conflict
@@ -104,13 +103,43 @@ extern char *__brkval;
 #define EVENT_TRACK_PWR_CMD 0x15
 #define EVENT_BLOCK_CMD 0x16
 #define EVENT_GLOBAL_ROUTE_CMD 0x17
-// Command functions for EVENT_TURNOUT_CMD / EVENT_SIGNAL_CMD (e.g. cmd_response)
-#define CMD_FUNC_GET_STATE   0x1
-#define CMD_FUNC_SET_NO_LOCK 0x2
-#define CMD_FUNC_SET_WITH_LOCK 0x3
-#define CMD_FUNC_RELEASE_LOCK 0x7f
-// Turnout state (data1): 0x1 closed/main, 0x2 thrown/divergent, 0x3 toggle
-// Signal state (data1): 0x0 OFF, 0x1 Stop, 0x2 Clear, 0x3 Approach/Caution
+
+/////////////////////////////////////////////////
+// Event subscription masking values
+/////////////////////////////////////////////////
+
+#define INCLUDE_NODE_EVENTS 1
+#define INCLUDE_TURNOUT_EVENTS 2
+#define INCLUDE_SIGNAL_EVENTS 4
+#define INCLUDE_BLOCK_EVENTS 8
+#define INCLUDE_CROSSING_EVENTS 16
+#define INCLUDE_TURNTABLE_EVENTS 32
+#define INCLUDE_SCENE_EVENTS 64
+#define INCLUDE_TRACK_POWER_EVENTS 128
+#define INCLUDE_BUTTON_EVENTS 1024
+#define INCLUDE_SWITCH_EVENTS 2048
+#define INCLUDE_SENSOR_EVENTS 4096
+
+/////////////////////////////////////////
+// Signal ASPECT values
+/////////////////////////////////////////
+
+#define SIGNAL_STOP 1
+#define SIGNAL_APPROACH 2
+#define SIGNAL_CLEAR 3
+#define SIGNAL_OFF 4
+
+/////////////////////////////////////////
+// Turnout ALIGNMENTS
+/////////////////////////////////////////
+#define ALIGN_NONE 0
+#define ALIGN_MAIN  1
+#define ALIGN_CLOSED 1
+#define ALIGN_DIVERGENT 2
+#define ALIGN_THROWN 2
+#define ALIGN_ANY 3
+#define ALIGN_TOGGLE 3
+
 ////////////////////////////////////////
 // TYPES
 ////////////////////////////////////////
