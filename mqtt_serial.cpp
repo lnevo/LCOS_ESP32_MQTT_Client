@@ -140,8 +140,10 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
   byte topic_uid = uid;  // default: data0 is already full LCOS UID (e.g. turnouts 8–15)
 
   switch (event) {
-    case EV_TURNOUT:
     case EV_TURNOUT_CMD:
+      /* Status (EV_TURNOUT) is authoritative for JMRI; CMD frames often carry non-UID data0 (e.g. 0x7F). */
+      return;
+    case EV_TURNOUT:
       prefix = MQTT_TOPIC_TURNOUT;
       payload = turnoutLcOsData1ToJmriPayload(data1);
       break;
