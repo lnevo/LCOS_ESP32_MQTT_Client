@@ -3,3 +3,14 @@
 *.bin
 build/
 .DS_Store
+
+# Python (serial_to_mqtt.py)
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+.env
+.env.*
+!.env.example

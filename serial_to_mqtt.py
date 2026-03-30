@@ -19,7 +19,7 @@ Usage (Windows):
   run_serial_mqtt_debug.cmd        # verbose + --debug (Arduino DBG lines on console); no PING
   run_serial_mqtt_heartbeat.cmd    # PING heartbeat + verbose; DBG suppressed unless you add --debug
 
-Requires: pip install pyserial paho-mqtt
+Requires: pip install -r requirements.txt (pyserial, paho-mqtt). See docs/serial_mqtt_windows.md on Windows.
 """
 
 from __future__ import annotations
