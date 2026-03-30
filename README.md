@@ -17,8 +17,8 @@ JMRI-oriented **MQTT bridge** for an **Arduino Nano** running LCOS: the sketch p
 - **`lcos_mqtt_bridge.cpp` / `.h`** — Event 125 subscriptions, serial line handling (e.g. heartbeat `PING`), coordination with `gateways.h`.
 - **`mqtt_serial.cpp` / `.h`** — LCOS operations events → one MQTT line per publish: `topic payload\n` for JMRI-style topics under `track/`.
 - **`serial_to_mqtt.py`** — Host bridge: serial ↔ MQTT; optional debug heartbeat; subscribes to `track/bridge/heartbeat` for `PING` relay.
-- **`docs/serial_mqtt_windows.md`** — Windows: Python, venv, COM port.
-- **`docs/serial_mqtt_linux.md`** — Linux/macOS: venv, `dialout`, **`run_serial_mqtt.sh`** (and debug/heartbeat variants).
+- **`docs/serial_mqtt_windows.md`** — Windows: Python, venv, COM port, **`run_serial_mqtt.cmd`** (word options `verbose`, `debug`, `heartbeat`; help `-h` / `/?`).
+- **`docs/serial_mqtt_linux.md`** — Linux/macOS: venv, `dialout`, **`run_serial_mqtt.sh`** (`-h`, `-v`, `-d`, `-hb`).
 - **`docs/jmri_host_protocol_plan.md`** (on feature branches if present) — Planning notes for future host commands.
 
 ### Bridge-only symbols

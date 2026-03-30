@@ -53,7 +53,20 @@ Verbose MQTT publishes:
 run_serial_mqtt.cmd verbose
 ```
 
-Other launchers: `run_serial_mqtt_debug.cmd`, `run_serial_mqtt_heartbeat.cmd`. You can pass extra arguments through to the script (e.g. `--com COM5`).
+Debug (Arduino `DBG` lines on the console) and serial heartbeat mode:
+
+```bat
+run_serial_mqtt.cmd debug
+run_serial_mqtt.cmd heartbeat
+```
+
+Launcher help (`-h`, `-?`, `/h`, `/?`, `help`):
+
+```bat
+run_serial_mqtt.cmd -h
+```
+
+Any other tokens are passed through to Python (e.g. `--com COM5 --broker 10.0.0.1`).
 
 Direct invocation:
 

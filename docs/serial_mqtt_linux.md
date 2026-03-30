@@ -46,10 +46,10 @@ Common paths: `/dev/ttyUSB0`, `/dev/ttyACM0`. Your user must be allowed to open 
 
 ## 4. Run the bridge
 
-Make the scripts executable once:
+Make the launcher executable once:
 
 ```bash
-chmod +x run_serial_mqtt.sh run_serial_mqtt_debug.sh run_serial_mqtt_heartbeat.sh
+chmod +x run_serial_mqtt.sh
 ```
 
 Default serial port and broker match the Windows launchers; override with environment variables:
@@ -60,20 +60,25 @@ export BROKER=192.168.137.1
 ./run_serial_mqtt.sh
 ```
 
-Verbose MQTT publishes (same as passing `verbose` as first argument):
+Verbose MQTT publishes:
 
 ```bash
+./run_serial_mqtt.sh -v
+# or (legacy word-style)
 ./run_serial_mqtt.sh verbose
 # or
 SERIAL_VERBOSE=1 ./run_serial_mqtt.sh
 ```
 
-Other modes:
+Debug (`-d`) and serial heartbeat (`-hb`):
 
 ```bash
-./run_serial_mqtt_debug.sh       # verbose + Arduino DBG lines
-./run_serial_mqtt_heartbeat.sh # serial PING heartbeat + verbose
+./run_serial_mqtt.sh -d
+./run_serial_mqtt.sh -hb
+./run_serial_mqtt.sh -v -d -hb
 ```
+
+Launcher help: `./run_serial_mqtt.sh -h` (also `-?`, `--help`).
 
 Extra arguments are passed through to `serial_to_mqtt.py`:
 

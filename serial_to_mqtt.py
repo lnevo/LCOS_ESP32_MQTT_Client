@@ -15,13 +15,12 @@ We always subscribe to HEARTBEAT_MQTT_TOPIC: payload exactly PING is relayed to 
 heartbeat). Arduino replies with ACK PING on that topic; that payload does not re-trigger serial.
 
 Usage:
-  Windows: python serial_to_mqtt.py --com COM3 --broker 192.168.137.1
-           run_serial_mqtt.cmd | run_serial_mqtt_debug.cmd | run_serial_mqtt_heartbeat.cmd (see docs/serial_mqtt_windows.md)
-  Linux:   ./run_serial_mqtt.sh [verbose]  [-- script args...]
-           SERIAL_PORT=/dev/ttyACM0 BROKER=... ./run_serial_mqtt.sh
-           (see docs/serial_mqtt_linux.md)
+  Windows:  run_serial_mqtt.cmd [-h|/?|...] [verbose] [debug] [heartbeat] [-- python-args...]
+            python serial_to_mqtt.py --com COM3 --broker ...
+  Linux:    ./run_serial_mqtt.sh [-h|-?|--help] [-v] [-d] [-hb] [-- extra python args]
+            SERIAL_PORT=/dev/ttyACM0 BROKER=... ./run_serial_mqtt.sh
 
-Requires: pip install -r requirements.txt (pyserial, paho-mqtt). Setup: docs/serial_mqtt_windows.md or docs/serial_mqtt_linux.md.
+Requires: pip install -r requirements.txt. Setup: docs/serial_mqtt_windows.md, docs/serial_mqtt_linux.md.
 """
 
 from __future__ import annotations
@@ -92,20 +91,35 @@ def _mqtt_connect_ok(reason_code: object) -> bool:
     return not getattr(reason_code, "is_failure", True)
 
 
+def _argv_for_argparse(argv: list[str]) -> list[str]:
+    """Treat lone -? /h /? /H or help as --help (single-argument invocations only)."""
+    if len(argv) == 2 and argv[1] in ("-h", "--help", "-?", "/h", "/H", "/?", "help"):
+        return [argv[0], "--help"]
+    return argv
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Serial (LCOS MQTT lines) -> MQTT broker")
+    sys.argv = _argv_for_argparse(sys.argv)
+
+    ap = argparse.ArgumentParser(
+        description="Serial (LCOS MQTT lines) -> MQTT broker",
+        epilog="Launchers: run_serial_mqtt.cmd (help -h /?; options: verbose debug heartbeat), "
+        "run_serial_mqtt.sh (-h -v -d -hb).",
+    )
     ap.add_argument("--com", default=DEFAULT_COM, help=f"Serial port (default {DEFAULT_COM})")
     ap.add_argument("--baud", type=int, default=DEFAULT_BAUD, help=f"Baud rate (default {DEFAULT_BAUD})")
     ap.add_argument("--broker", "-H", default=DEFAULT_BROKER, help=f"MQTT broker host (default {DEFAULT_BROKER})")
     ap.add_argument("--mqtt-port", type=int, default=DEFAULT_MQTT_PORT, help=f"MQTT port (default {DEFAULT_MQTT_PORT})")
     ap.add_argument("--verbose", "-v", action="store_true", help="Print each publish to stdout")
     ap.add_argument(
+        "-d",
         "--debug",
         action="store_true",
         help="Print Arduino DBG ... lines from serial (MQTT_SERIAL_OPS_DEBUG on firmware); default is to ignore them",
     )
     ap.add_argument(
         "--debug-heartbeat",
+        "--hb",
         action="store_true",
         help="Enable serial heartbeat + MQTT publish of ACK replies (or set DEBUG_HEARTBEAT = True in script)",
     )
