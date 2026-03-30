@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Arduino Nano serial <-> MQTT. Quiet unless SERIAL_VERBOSE=1 or first arg verbose/--verbose.
+# Override defaults: SERIAL_PORT=/dev/ttyACM0 BROKER=192.168.0.1 ./run_serial_mqtt.sh
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$ROOT"
+
+: "${SERIAL_PORT:=/dev/ttyUSB0}"
+: "${BROKER:=192.168.137.1}"
+
+PY=python3
+command -v "$PY" >/dev/null 2>&1 || PY=python
+
+VF=()
+if [[ "${SERIAL_VERBOSE:-0}" == "1" ]]; then
+  VF=(--verbose)
+fi
+if [[ "${1:-}" == "verbose" || "${1:-}" == "-verbose" || "${1:-}" == "--verbose" ]]; then
+  VF=(--verbose)
+  shift
+fi
+
+exec "$PY" "$ROOT/serial_to_mqtt.py" --com "$SERIAL_PORT" --broker "$BROKER" "${VF[@]}" "$@"

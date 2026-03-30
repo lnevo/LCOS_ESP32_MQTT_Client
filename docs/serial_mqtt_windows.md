@@ -72,6 +72,6 @@ mosquitto_pub -h <broker_host> -p 1883 -t track/bridge/heartbeat -m PING
 
 Use the same host/port as `--broker` / `--mqtt-port` on the script.
 
-## Linux / macOS later
+## Linux / macOS
 
-Use the same `requirements.txt` after `python3 -m venv .venv`, `source .venv/bin/activate`, and `pip install -r requirements.txt`. The `.cmd` launchers are Windows-only—run `python serial_to_mqtt.py` with the Arduino Nano’s USB serial device (e.g. `/dev/ttyUSB0` or `/dev/tty.usbserial-*`). In Cursor/VS Code, select **Python: Select Interpreter** → `./.venv/bin/python` so analysis matches `pyproject.toml`.
+See **[serial_mqtt_linux.md](serial_mqtt_linux.md)** (`run_serial_mqtt.sh`, `dialout`, `/dev/ttyUSB0`, etc.).

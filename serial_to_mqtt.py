@@ -14,13 +14,14 @@ We publish the "ACK ..." line to HEARTBEAT_MQTT_TOPIC (see DEBUG_HEARTBEAT).
 We always subscribe to HEARTBEAT_MQTT_TOPIC: payload exactly PING is relayed to serial (same bytes as
 heartbeat). Arduino replies with ACK PING on that topic; that payload does not re-trigger serial.
 
-Usage (Windows):
-  python serial_to_mqtt.py --com COM3 --broker 192.168.137.1
-  run_serial_mqtt.cmd              # quiet (or: run_serial_mqtt.cmd verbose  for MQTT TX only)
-  run_serial_mqtt_debug.cmd        # verbose + --debug (Arduino DBG lines on console); no PING
-  run_serial_mqtt_heartbeat.cmd    # PING heartbeat + verbose; DBG suppressed unless you add --debug
+Usage:
+  Windows: python serial_to_mqtt.py --com COM3 --broker 192.168.137.1
+           run_serial_mqtt.cmd | run_serial_mqtt_debug.cmd | run_serial_mqtt_heartbeat.cmd (see docs/serial_mqtt_windows.md)
+  Linux:   ./run_serial_mqtt.sh [verbose]  [-- script args...]
+           SERIAL_PORT=/dev/ttyACM0 BROKER=... ./run_serial_mqtt.sh
+           (see docs/serial_mqtt_linux.md)
 
-Requires: pip install -r requirements.txt (pyserial, paho-mqtt). See docs/serial_mqtt_windows.md on Windows.
+Requires: pip install -r requirements.txt (pyserial, paho-mqtt). Setup: docs/serial_mqtt_windows.md or docs/serial_mqtt_linux.md.
 """
 
 from __future__ import annotations
