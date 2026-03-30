@@ -47,7 +47,7 @@ char *mqttTopicWithPackedAddress(char *buf, size_t bufSize, const char *prefix, 
 
 // --- JMRI payload conversion (exact strings per SERIAL OUTPUT PROTOCOL) ---
 
-/** Turnout: data1 0 → "CLOSED", else → "THROWN" */
+/** Turnout: lcos.h ALIGN_* on data1 → JMRI "CLOSED" / "THROWN" */
 const char *turnoutStateToPayload(byte data1);
 
 /** Sensor/Block/Button/etc.: data1 0 → "INACTIVE", else → "ACTIVE" */

@@ -31,19 +31,14 @@ char *mqttTopicWithPackedAddress(char *buf, size_t bufSize, const char *prefix, 
 }
 
 const char *turnoutStateToPayload(byte data1) {
-  /* JMRI: 0 = CLOSED, 1 = THROWN. If your node uses the opposite, swap the strings. */
-  return data1 == 0 ? "CLOSED" : "THROWN";
-}
-
-/** Map LCOS turnout data1 to JMRI payload strings (track/turnout/...). */
-static const char *turnoutLcOsData1ToJmriPayload(byte data1) {
-  /* lcos.h: 0x1 closed/main, 0x2 thrown, 0x3 toggle. Multicast turnout CMD echoes often use data1==0 for closed. */
-  if (data1 == 2) {
-    return "THROWN";
-  }
-  if (data1 == 1 || data1 == 0) {
+  /* lcos.h: ALIGN_MAIN/ALIGN_CLOSED (1), ALIGN_THROWN/ALIGN_DIVERGENT (2), ALIGN_TOGGLE/ALIGN_ANY (3), ALIGN_NONE (0). */
+  if (data1 == ALIGN_NONE || data1 == ALIGN_MAIN || data1 == ALIGN_CLOSED) {
     return "CLOSED";
   }
+  if (data1 == ALIGN_THROWN || data1 == ALIGN_DIVERGENT) {
+    return "THROWN";
+  }
+  /* Toggle/any: JMRI has no standard — publish THROWN as non-main. */
   return "THROWN";
 }
 
@@ -56,15 +51,15 @@ const char *powerStateToPayload(byte data1) {
 }
 
 // --- Signal mast (EVENT_SIGNAL 0x3 status, EVENT_SIGNAL_CMD 0x11 command; UID_OFFSET_SIGNALS 32.)
-//     data1: 0=Off, 1=Stop. For 2/3: formal LCOS API lists 2=Clear, 3=Approach; on this layout we observe
-//     2=Approach, 3=Clear — adjust here if your nodes match the doc instead.
+// lcos.h: SIGNAL_STOP 1, SIGNAL_APPROACH 2, SIGNAL_CLEAR 3, SIGNAL_OFF 4. Legacy packets may still use 0.
 // JMRI expects "AspectName; Lit|Unlit; Held|Unheld" on track/signalmast/.
 static const char *signalMastAspectName(byte data1) {
   switch (data1) {
     case 0:  return "Off";
-    case 1:  return "Stop";
-    case 2:  return "Approach";  // Approach/Caution
-    case 3:  return "Clear";
+    case SIGNAL_STOP:    return "Stop";
+    case SIGNAL_APPROACH: return "Approach";
+    case SIGNAL_CLEAR:   return "Clear";
+    case SIGNAL_OFF:     return "Off";
     default: return "Dark";
   }
 }
@@ -76,16 +71,6 @@ const char *signalMastStateToPayload(byte data1) {
   snprintf(buf, sizeof(buf), "%s; Lit; Unheld", aspect);
   return buf;
 }
-
-// LCOS operations event codes we publish (turnouts, sensors, blocks, signal masts, lights)
-#define EV_TURNOUT      0x02
-#define EV_SIGNAL       0x03
-#define EV_BLOCK        0x04
-#define EV_BUTTON       0x0B
-#define EV_SWITCH       0x0C
-#define EV_TURNOUT_CMD  0x10
-#define EV_SIGNAL_CMD   0x11
-#define EV_BLOCK_CMD    0x16
 
 // Internal: LCOS payload source vs RF24 last-hop often differ on relay trees (compare when "wrong" node in MQTT).
 static void debugOperationPayload(Print &out, byte event, uint16_t lcos_source_node, uint16_t rf24_from_node, uint16_t to_node,
@@ -129,7 +114,7 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
   byte data1 = pkt->data1;
   byte data2 = pkt->data2;
 
-  if (debug && (event == EV_TURNOUT || event == EV_TURNOUT_CMD || event == EV_SIGNAL || event == EV_SIGNAL_CMD || event == EV_BLOCK || event == EV_BLOCK_CMD || event == EV_BUTTON || event == EV_SWITCH)) {
+  if (debug && (event == EVENT_TURNOUT || event == EVENT_TURNOUT_CMD || event == EVENT_SIGNAL || event == EVENT_SIGNAL_CMD || event == EVENT_BLOCK || event == EVENT_BLOCK_CMD || event == EVENT_BUTTON || event == EVENT_SWITCH_CONTACT)) {
     debugOperationPayload(out, event, node, pkt->from_node, pkt->to_node, uid, data1, data2,
       pkt->data3, pkt->data4, pkt->data5, pkt->data6, pkt->cmd_response);
   }
@@ -140,28 +125,28 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
   byte topic_uid = uid;  // default: data0 is already full LCOS UID (e.g. turnouts 8–15)
 
   switch (event) {
-    case EV_TURNOUT_CMD:
-      /* Status (EV_TURNOUT) is authoritative for JMRI; CMD frames often carry non-UID data0 (e.g. 0x7F). */
+    case EVENT_TURNOUT_CMD:
+      /* Status (EVENT_TURNOUT) is authoritative for JMRI; CMD frames often carry non-UID data0 (e.g. 0x7F). */
       return;
-    case EV_TURNOUT:
+    case EVENT_TURNOUT:
       prefix = MQTT_TOPIC_TURNOUT;
-      payload = turnoutLcOsData1ToJmriPayload(data1);
+      payload = turnoutStateToPayload(data1);
       break;
-    case EV_SIGNAL:
-    case EV_SIGNAL_CMD:
+    case EVENT_SIGNAL:
+    case EVENT_SIGNAL_CMD:
       prefix = MQTT_TOPIC_SIGNALMAST;
       payload = signalMastStateToPayload(data1);
       /* lcos.h: UID_OFFSET_SIGNALS 32 (range 32–47). data0 = uid or index not defined in library; we use offset+data0. */
       topic_uid = UID_OFFSET_SIGNALS + uid;
       break;
-    case EV_BLOCK:
-    case EV_BLOCK_CMD:
-    case EV_BUTTON:
-    case EV_SWITCH:
+    case EVENT_BLOCK:
+    case EVENT_BLOCK_CMD:
+    case EVENT_BUTTON:
+    case EVENT_SWITCH_CONTACT:
       prefix = MQTT_TOPIC_SENSOR;
       payload = sensorStateToPayload(data1);
       /* data0 is index; LCOS UID = offset + index (blocks 0–7, button/switch 67–82) */
-      topic_uid = (event == EV_BLOCK || event == EV_BLOCK_CMD) ? (UID_OFFSET_BLOCKS + uid) : (UID_OFFSET_CONTROL_OBJECTS + uid);
+      topic_uid = (event == EVENT_BLOCK || event == EVENT_BLOCK_CMD) ? (UID_OFFSET_BLOCKS + uid) : (UID_OFFSET_CONTROL_OBJECTS + uid);
       break;
     // lights: add case when LCOS event is defined
     default:

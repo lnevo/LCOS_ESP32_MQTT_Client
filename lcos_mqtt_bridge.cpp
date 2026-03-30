@@ -5,19 +5,7 @@
 #include "lcos_mqtt_bridge.h"
 #include "gateways.h"
 
-// --- MASTER Event Distributor (event 125) subscription masks ---
-#define INCLUDE_NODE_EVENTS         1
-#define INCLUDE_TURNOUT_EVENTS      2
-#define INCLUDE_SIGNAL_EVENTS       4
-#define INCLUDE_BLOCK_EVENTS        8
-#define INCLUDE_CROSSING_EVENTS     16
-#define INCLUDE_TURNTABLE_EVENTS    32
-#define INCLUDE_SCENE_EVENTS        64
-#define INCLUDE_TRACK_POWER_EVENTS  128
-#define INCLUDE_BUTTON_EVENTS       1024
-#define INCLUDE_SWITCH_EVENTS       2048
-#define INCLUDE_SENSOR_EVENTS       4096
-
+/* Event 125 subscription mask — INCLUDE_* bits from lcos.h */
 #define SUBSCRIBE_EVENT_MASK (INCLUDE_BLOCK_EVENTS | INCLUDE_TURNOUT_EVENTS | INCLUDE_SIGNAL_EVENTS \
   | INCLUDE_BUTTON_EVENTS | INCLUDE_SWITCH_EVENTS | INCLUDE_TRACK_POWER_EVENTS | INCLUDE_SENSOR_EVENTS)
 
@@ -63,9 +51,10 @@ static void pollSerialTextLineForAck(lcos_layout *layout) {
         Serial.println(s_serialLineBuf);
         if (layout != NULL && strcmp(s_serialLineBuf, HB_SERIAL_TOKEN) == 0) {
           /* Unicast to the turnout owner: multicast=true only sends to master (00) per LCMNetwork::emitEvent. */
-          /* lcos.h: data1 0x1 closed, 0x2 thrown; last byte = CMD_FUNC_SET_NO_LOCK (0x2). */
+          /* lcos.h turnout alignment: ALIGN_MAIN/ALIGN_CLOSED = 1, ALIGN_THROWN/ALIGN_DIVERGENT = 2, etc. */
+          /* cmd_response 0x02 = set state without lock (per LCOS command table / README). */
           layout->sendShortMessage(false, HB_TURNOUT_NODE, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
-            (byte)HB_TURNOUT_UID, 2, 0, 0x02);
+            (byte)HB_TURNOUT_UID, (byte)ALIGN_THROWN, 0, 0x02);
           layout->update();
         }
       }

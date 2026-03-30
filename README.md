@@ -27,7 +27,7 @@ This repo includes **`serial_to_mqtt.py`**, which connects the **Arduino Nano** 
 
 ## Overview
 
-LCOS is a distributed control system for model railroa0d layouts using nRF24L01 radio modules. The library provides a network protocol for coordinating turnouts, signals, blocks, routes, and other layout objects across multiple Arduino nodes.
+LCOS is a distributed control system for model railroad layouts using nRF24L01 radio modules. The library provides a network protocol for coordinating turnouts, signals, blocks, routes, and other layout objects across multiple Arduino nodes.
 
 ### Key Features
 
@@ -227,11 +227,11 @@ void handleOperationsEvents(DATAGRAM *pkt) {
   byte state = pkt->data1;    // Object state
   
   switch(pkt->event) {
-    case EVENT_TURNOUT:  // 0x2
-      if (state == 0) {
-        // Turnout is CLOSED
-      } else {
-        // Turnout is THROWN
+    case EVENT_TURNOUT:  // 0x2 — data1 uses ALIGN_* (1 = closed/main, 2 = thrown/divergent, …)
+      if (state == ALIGN_MAIN || state == ALIGN_CLOSED || state == ALIGN_NONE) {
+        // Turnout is CLOSED / main
+      } else if (state == ALIGN_THROWN || state == ALIGN_DIVERGENT) {
+        // Turnout is THROWN / divergent
       }
       break;
       
@@ -273,10 +273,10 @@ void handleOperationsEvents(DATAGRAM *pkt) {
 
 Lock/release for signals is not yet implemented; for turnouts it is only partially implemented. Semantics are the same for both when implemented. Lock authority: MASTER has automatic lock/release rights; MASTER may delegate to another node (e.g. CTC). Whether any node can issue lock commands or only MASTER/designated is a design decision.
 
-**State options (data1):**
+**State options (data1) — use `lcos.h` symbol values (portable):**
 
-- **Turnouts:** `0x1` = Align closed/main, `0x2` = Align thrown/divergent, `0x3` = Toggle.
-- **Signals:** `0x0` = OFF, `0x1` = Stop, `0x2` = Clear, `0x3` = Approach/Caution.
+- **Turnouts:** `ALIGN_MAIN` / `ALIGN_CLOSED` = 1 (main/closed), `ALIGN_DIVERGENT` / `ALIGN_THROWN` = 2, `ALIGN_TOGGLE` / `ALIGN_ANY` = 3, `ALIGN_NONE` = 0.
+- **Signals:** `SIGNAL_STOP` = 1, `SIGNAL_APPROACH` = 2, `SIGNAL_CLEAR` = 3, `SIGNAL_OFF` = 4 (legacy packets may use `0` for off).
 
 ### UID Offsets for CTC Objects
 
@@ -345,14 +345,14 @@ Signals display aspects to control train movement.
 #### Setting Signal Aspect
 
 ```cpp
-// Set signal 5 to aspect 2 (e.g., "Approach")
+// Set signal 5 to approach (SIGNAL_APPROACH == 2 in lcos.h)
 layout->sendShortMessage(
   true,                    // broadcast
   0,                       // destination
   ETYPE_OPERATING,
   EVENT_SIGNAL_CMD,        // 0x11
   UID_OFFSET_SIGNALS + 5,  // Signal UID
-  2,                       // Aspect number
+  SIGNAL_APPROACH,
   0,                       // Additional data
   0                        // responding_to
 );
@@ -426,14 +426,14 @@ Turnouts (switches) route trains between tracks.
 #### Setting Turnout Position
 
 ```cpp
-// Set turnout 2 to THROWN position
+// Set turnout 2 to THROWN / divergent (ALIGN_THROWN == ALIGN_DIVERGENT == 2 in lcos.h)
 layout->sendShortMessage(
   true,                           // broadcast
   0,                              // destination
   ETYPE_OPERATING,
   EVENT_TURNOUT_CMD,              // 0x10
   UID_OFFSET_TURNOUTS + 2,        // Turnout UID
-  1,                              // 1 = THROWN, 0 = CLOSED
+  ALIGN_THROWN,                   // not 0/1 — use ALIGN_* from lcos.h
   0,                              // Additional data
   0                               // responding_to
 );
@@ -449,7 +449,8 @@ void handleOperationsEvents(DATAGRAM *pkt) {
       {
         byte turnoutUID = pkt->data0;
         byte turnoutNumber = turnoutUID - UID_OFFSET_TURNOUTS;
-        bool thrown = (pkt->data1 != 0);
+        byte al = pkt->data1;
+        bool thrown = (al == ALIGN_THROWN || al == ALIGN_DIVERGENT || al == ALIGN_TOGGLE || al == ALIGN_ANY);
         
         // Update turnout position
         setTurnoutPosition(turnoutNumber, thrown);
@@ -511,17 +512,17 @@ void activateRoute(byte routeNumber) {
   
   // Step 1: Set turnouts
   layout->sendShortMessage(true, 0, ETYPE_OPERATING, 
-    EVENT_TURNOUT_CMD, UID_OFFSET_TURNOUTS + 1, 0, 0, 0);  // Turnout 1 CLOSED
+    EVENT_TURNOUT_CMD, UID_OFFSET_TURNOUTS + 1, ALIGN_MAIN, 0, 0);  // Turnout 1 CLOSED / main
   
   layout->sendShortMessage(true, 0, ETYPE_OPERATING,
-    EVENT_TURNOUT_CMD, UID_OFFSET_TURNOUTS + 3, 1, 0, 0);  // Turnout 3 THROWN
+    EVENT_TURNOUT_CMD, UID_OFFSET_TURNOUTS + 3, ALIGN_THROWN, 0, 0);  // Turnout 3 THROWN
   
   // Step 2: Set signals
   layout->sendShortMessage(true, 0, ETYPE_OPERATING,
-    EVENT_SIGNAL_CMD, UID_OFFSET_SIGNALS + 2, 3, 0, 0);    // Signal 2 CLEAR
+    EVENT_SIGNAL_CMD, UID_OFFSET_SIGNALS + 2, SIGNAL_CLEAR, 0, 0);
   
   layout->sendShortMessage(true, 0, ETYPE_OPERATING,
-    EVENT_SIGNAL_CMD, UID_OFFSET_SIGNALS + 4, 2, 0, 0);    // Signal 4 APPROACH
+    EVENT_SIGNAL_CMD, UID_OFFSET_SIGNALS + 4, SIGNAL_APPROACH, 0, 0);
   
   // Step 3: Broadcast route activation
   layout->sendShortMessage(true, 0, ETYPE_OPERATING,
@@ -589,7 +590,7 @@ layout->sendShortMessage(
   ETYPE_OPERATING,                // operations event
   EVENT_TURNOUT_CMD,              // turnout command
   UID_OFFSET_TURNOUTS + 5,        // Turnout 5
-  1,                              // 1 = THROWN, 0 = CLOSED
+  ALIGN_THROWN,                   // lcos.h ALIGN_* (not legacy 0/1)
   0,                              // no secondary data
   0                               // not responding to another command
 );
@@ -620,7 +621,7 @@ msg.to_node = 03;  // Destination node
 msg.event_type = ETYPE_OPERATING;
 msg.event = EVENT_TURNOUT_CMD;
 msg.data0 = UID_OFFSET_TURNOUTS + 1;
-msg.data1 = 1;  // THROWN
+msg.data1 = ALIGN_THROWN;  // lcos.h
 // ... set other fields
 
 layout->getNetworkObject()->emitEvent(false, 03, &msg);
@@ -706,8 +707,8 @@ void loop() {
   if (millis() - lastToggle > 5000) {
     turnoutState = !turnoutState;
     layout->sendShortMessage(true, 0, ETYPE_OPERATING,
-      EVENT_TURNOUT_CMD, UID_OFFSET_TURNOUTS + 1, 
-      turnoutState ? 1 : 0, 0, 0);
+      EVENT_TURNOUT_CMD, UID_OFFSET_TURNOUTS + 1,
+      turnoutState ? ALIGN_THROWN : ALIGN_MAIN, 0, 0);
     lastToggle = millis();
   }
 }
@@ -735,7 +736,7 @@ void handleOperationsEvents(DATAGRAM *pkt) {
       // Block occupied - set signal to stop
       layout->sendShortMessage(true, 0, ETYPE_OPERATING,
         EVENT_SIGNAL_CMD, UID_OFFSET_SIGNALS + blockNumber,
-        0, 0, 0);  // Aspect 0 = Stop
+        SIGNAL_STOP, 0, 0);  // lcos.h SIGNAL_STOP
     }
   }
 }
@@ -756,8 +757,8 @@ void activateRoute(byte routeNum) {
   
   // Route 1: Main line through station
   Route route1[] = {
-    {UID_OFFSET_TURNOUTS + 1, 0, UID_OFFSET_SIGNALS + 2, 3},
-    {UID_OFFSET_TURNOUTS + 3, 1, UID_OFFSET_SIGNALS + 4, 2}
+    {UID_OFFSET_TURNOUTS + 1, ALIGN_MAIN, UID_OFFSET_SIGNALS + 2, SIGNAL_CLEAR},
+    {UID_OFFSET_TURNOUTS + 3, ALIGN_THROWN, UID_OFFSET_SIGNALS + 4, SIGNAL_APPROACH}
   };
   
   // Set all turnouts and signals for route

@@ -152,7 +152,7 @@ Status Events:
 
 - Case 2:  Turnout status event
   → Topic: track/turnout/{pkt->data0}
-  → Content: "CLOSED" (if pkt->data1 == 0) or "THROWN" (if pkt->data1 == 1)
+  → Content: see mqtt_serial turnoutStateToPayload — lcos.h ALIGN_MAIN/CLOSED (1) → CLOSED, ALIGN_THROWN/DIVERGENT (2) → THROWN, etc.
 
 - Case 3:  Signal status event
   → Topic: track/signalmast/{pkt->data0}
@@ -262,8 +262,8 @@ LCOS API (authoritative notes)
 - Turnout/Signal commands: Event 0x10 (turnout), 0x11 (signal). Listen for status on 0x2, 0x3.
 - Command functions: 0x1 Get State, 0x2 Set without Lock, 0x3 Set with Lock, 0x7f Release Lock.
   Lock/release for signals not yet implemented; turnouts partial. MASTER has lock rights; can delegate.
-- Turnout data1: 0x1 closed/main, 0x2 thrown/divergent, 0x3 toggle.
-- Signal data1: 0x0 OFF, 0x1 Stop, 0x2 Clear, 0x3 Approach/Caution.
+- Turnout data1 (lcos.h): ALIGN_NONE 0, ALIGN_MAIN/CLOSED 1, ALIGN_DIVERGENT/THROWN 2, ALIGN_ANY/TOGGLE 3.
+- Signal data1 (lcos.h): SIGNAL_STOP 1, SIGNAL_APPROACH 2, SIGNAL_CLEAR 3, SIGNAL_OFF 4 (0 may appear as legacy off).
 - See README "LCOS API (authoritative notes)" for full detail.
 
 TECHNICAL NOTES
@@ -279,7 +279,7 @@ TECHNICAL NOTES
 OPEN QUESTIONS
 --------------
 1. How are LCOS signal values (pkt->data1) encoded for signals?
-   - Resolved per LCOS API: 0=Off, 1=Stop, 2=Clear, 3=Approach/Caution (see README/todo LCOS API notes)
+   - Resolved in lcos.h v1.0.10+: SIGNAL_STOP/APPROACH/CLEAR/OFF; mqtt_serial maps to JMRI aspect strings (legacy 0 → Off).
 
 2. Should route commands (Case 23) be handled differently?
    - Routes may affect multiple turnouts/signals
