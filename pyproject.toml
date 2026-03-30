@@ -1,0 +1,7 @@
+[tool.pyright]
+# Pylance / Pyright: resolve third-party imports (pyserial, paho-mqtt) from the repo venv.
+# Create once from repo root:  python -m venv .venv
+# Then:  pip install -r requirements.txt   (after activating .venv on your OS)
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.11"

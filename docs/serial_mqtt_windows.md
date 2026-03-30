@@ -26,7 +26,7 @@ python -m pip install -r requirements.txt
 
 That installs **pyserial** and **paho-mqtt** (see `requirements.txt`).
 
-Optional isolated environment:
+**Recommended:** use a **virtual environment** in the repo root (matches `pyproject.toml` / Pyright so **Cursor** and **VS Code** stop flagging `import serial` / `paho.mqtt`):
 
 ```bat
 python -m venv .venv
@@ -35,7 +35,9 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-If you use a venv, run `serial_to_mqtt.py` from an activated shell, or call `.venv\Scripts\python.exe serial_to_mqtt.py`.
+Run `serial_to_mqtt.py` from that activated shell, or call `.venv\Scripts\python.exe serial_to_mqtt.py`.
+
+**Cursor / VS Code:** after the venv exists and packages are installed, open the Command Palette and choose **Python: Select Interpreter** → pick **`.venv\Scripts\python.exe`** (this folder). Pyright reads `pyproject.toml` and uses the `.venv` under the repo root for analysis.
 
 ## 3. Run the bridge
 
@@ -72,4 +74,4 @@ Use the same host/port as `--broker` / `--mqtt-port` on the script.
 
 ## Linux / macOS later
 
-Use the same `requirements.txt` with `python3 -m pip install -r requirements.txt`; the `.cmd` launchers are Windows-only—run `python3 serial_to_mqtt.py` with the right `--com` or `/dev/tty*` device path.
+Use the same `requirements.txt` after `python3 -m venv .venv`, `source .venv/bin/activate`, and `pip install -r requirements.txt`. The `.cmd` launchers are Windows-only—run `python serial_to_mqtt.py` with the right `/dev/tty.*` path. In Cursor/VS Code, select **Python: Select Interpreter** → `./.venv/bin/python` so analysis matches `pyproject.toml`.

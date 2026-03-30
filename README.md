@@ -6,7 +6,7 @@ Copyright 2022-26 Beagle Bay Inc
 
 ### MQTT / JMRI serial bridge (Python)
 
-This repo includes **`serial_to_mqtt.py`**, which connects the ESP32/Arduino serial line to an MQTT broker. On **Windows**, install Python 3, then `pip install -r requirements.txt`; full steps and test commands are in **[docs/serial_mqtt_windows.md](docs/serial_mqtt_windows.md)**.
+This repo includes **`serial_to_mqtt.py`**, which connects the ESP32/Arduino serial line to an MQTT broker. On **Windows**, install Python 3, then `pip install -r requirements.txt`; full steps and test commands are in **[docs/serial_mqtt_windows.md](docs/serial_mqtt_windows.md)**. For **Cursor / VS Code** import hints, use a repo-local **`.venv`** and **`pyproject.toml`** (see that doc).
 
 ## Table of Contents
 
