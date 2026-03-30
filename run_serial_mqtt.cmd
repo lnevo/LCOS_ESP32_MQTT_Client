@@ -1,9 +1,8 @@
 @echo off
-REM Default: quiet serial bridge, no PING heartbeat.
-REM Verbose (MQTT TX lines on console, still NO heartbeat): run_serial_mqtt.cmd verbose
-REM   or: run_serial_mqtt.cmd -verbose   or   run_serial_mqtt.cmd --verbose
-REM Any other args pass through to serial_to_mqtt.py (e.g. --com COM5).
-REM Heartbeat + verbose: use run_serial_mqtt_debug.cmd
+REM Quiet or verbose serial -> MQTT; no PING; Arduino DBG lines are not printed (use run_serial_mqtt_debug.cmd).
+REM Verbose (MQTT TX lines only): run_serial_mqtt.cmd verbose  |  -verbose  |  --verbose
+REM Heartbeat: run_serial_mqtt_heartbeat.cmd   |   DBG on console: run_serial_mqtt_debug.cmd
+REM Extra args pass through (e.g. --com COM5 --debug).
 cd /d "%~dp0"
 
 set "COM=COM3"

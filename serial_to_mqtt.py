@@ -12,9 +12,9 @@ We publish the "ACK ..." line to HEARTBEAT_MQTT_TOPIC (see DEBUG_HEARTBEAT).
 
 Usage (Windows):
   python serial_to_mqtt.py --com COM3 --broker 192.168.137.1
-  run_serial_mqtt.cmd
-  run_serial_mqtt.cmd verbose    # -verbose / --verbose : print TX lines, no serial PING
-  run_serial_mqtt_debug.cmd        # PING heartbeat + verbose
+  run_serial_mqtt.cmd              # quiet (or: run_serial_mqtt.cmd verbose  for MQTT TX only)
+  run_serial_mqtt_debug.cmd        # verbose + --debug (Arduino DBG lines on console); no PING
+  run_serial_mqtt_heartbeat.cmd    # PING heartbeat + verbose; DBG suppressed unless you add --debug
 
 Requires: pip install pyserial paho-mqtt
 """
@@ -78,6 +78,11 @@ def main() -> int:
     ap.add_argument("--broker", "-H", default=DEFAULT_BROKER, help=f"MQTT broker host (default {DEFAULT_BROKER})")
     ap.add_argument("--mqtt-port", type=int, default=DEFAULT_MQTT_PORT, help=f"MQTT port (default {DEFAULT_MQTT_PORT})")
     ap.add_argument("--verbose", "-v", action="store_true", help="Print each publish to stdout")
+    ap.add_argument(
+        "--debug",
+        action="store_true",
+        help="Print Arduino DBG ... lines from serial (MQTT_SERIAL_OPS_DEBUG on firmware); default is to ignore them",
+    )
     ap.add_argument(
         "--debug-heartbeat",
         action="store_true",
@@ -162,6 +167,11 @@ def main() -> int:
                 except Exception:
                     continue
                 stripped = line.strip("\r\n")
+
+                if stripped.startswith("DBG "):
+                    if args.debug:
+                        print(stripped)
+                    continue
 
                 parsed = parse_line(line)
                 if parsed is not None:
