@@ -63,9 +63,9 @@ static void pollSerialTextLineForAck(lcos_layout *layout) {
         Serial.println(s_serialLineBuf);
         if (layout != NULL && strcmp(s_serialLineBuf, HB_SERIAL_TOKEN) == 0) {
           /* Unicast to the turnout owner: multicast=true only sends to master (00) per LCMNetwork::emitEvent. */
-          /* lcos.h: data1=0x1 closed; mqtt_serial maps 0/1 -> CLOSED. Last byte = CMD_FUNC_SET_NO_LOCK (0x2). */
+          /* lcos.h: data1 0x1 closed, 0x2 thrown; last byte = CMD_FUNC_SET_NO_LOCK (0x2). */
           layout->sendShortMessage(false, HB_TURNOUT_NODE, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
-            (byte)HB_TURNOUT_UID, 1, 0, 0x02);
+            (byte)HB_TURNOUT_UID, 2, 0, 0x02);
           layout->update();
         }
       }
