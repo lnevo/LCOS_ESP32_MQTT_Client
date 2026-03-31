@@ -248,10 +248,10 @@ def main() -> int:
                     f"{HEARTBEAT_SERIAL_LINE!r}"
                 )
             print(
-                f"Subscribed to {CMD_TURNOUT_SUBSCRIBE!r} — "
-                f"topic {CMD_TURNOUT_TOPIC!r}/<packed> payload THROWN|CLOSED, "
-                f"or flat {CMD_TURNOUT_TOPIC!r} payload '<packed> THROWN|CLOSED'; "
-                f"serial: {CMD_TURNOUT_TOPIC!r}/<packed> …"
+                f"Subscribed to {CMD_TURNOUT_SUBSCRIBE!r} (JMRI turnout commands).\n"
+                f"  Accept MQTT: {CMD_TURNOUT_TOPIC}/<packed> payload THROWN|CLOSED, or "
+                f"{CMD_TURNOUT_TOPIC!r} with payload \"<packed> THROWN|CLOSED\".\n"
+                f"  Send serial: {CMD_TURNOUT_TOPIC}/<packed> THROWN|CLOSED (LF line)."
             )
             mqtt_sub_announced = True
 
