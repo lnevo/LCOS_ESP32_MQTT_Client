@@ -259,11 +259,6 @@ def main() -> int:
         ping_q, turnout_q = userdata
         if heartbeat_on and msg.topic == HEARTBEAT_MQTT_TOPIC:
             if bool(getattr(msg, "retain", False)):
-                if args.verbose:
-                    print(
-                        f"MQTT heartbeat ignored retained message on {msg.topic!r}",
-                        file=sys.stderr,
-                    )
                 return
             try:
                 payload = msg.payload.decode("utf-8", errors="replace").strip()
@@ -289,11 +284,6 @@ def main() -> int:
                 )
             return
         if bool(getattr(msg, "retain", False)):
-            if args.verbose:
-                print(
-                    f"MQTT turnout cmd ignored retained message on {msg.topic!r}",
-                    file=sys.stderr,
-                )
             return
         if args.verbose:
             qos = getattr(msg, "qos", "?")
