@@ -228,32 +228,26 @@ def main() -> int:
 
     ping_cmd_queue: queue.Queue[object] = queue.Queue(maxsize=32)
     turnout_cmd_queue: queue.Queue[bytes] = queue.Queue(maxsize=32)
-    mqtt_sub_announced = False
 
     client = _make_mqtt_client()
     client.user_data_set((ping_cmd_queue, turnout_cmd_queue))
 
+    def _subscribe_line(_client: mqtt.Client, topic: str, qos: int = 1) -> None:
+        res = _client.subscribe(topic, qos=qos)
+        rc = res[0] if isinstance(res, tuple) else res
+        ok = getattr(mqtt, "MQTT_ERR_SUCCESS", 0)
+        if isinstance(rc, int):
+            st = "ok" if rc == ok else f"failed (rc={rc})"
+        else:
+            st = "ok" if not getattr(rc, "is_failure", True) else "failed"
+        print(f"subscribe {topic!r}: {st}")
+
     def on_connect(_client, _userdata, _flags, reason_code, _properties=None):
-        nonlocal mqtt_sub_announced
         if not _mqtt_connect_ok(reason_code):
             return
         if heartbeat_on:
-            _client.subscribe(HEARTBEAT_MQTT_TOPIC, qos=1)
-        # Covers track/cmd/turnout (flat) and track/cmd/turnout/<packed> (JMRI); one subscription.
-        _client.subscribe(CMD_TURNOUT_SUBSCRIBE, qos=1)
-        if not mqtt_sub_announced:
-            if heartbeat_on:
-                print(
-                    f"Subscribed to {HEARTBEAT_MQTT_TOPIC!r} — MQTT payload PING -> serial "
-                    f"{HEARTBEAT_SERIAL_LINE!r}"
-                )
-            print(
-                f"Subscribed to {CMD_TURNOUT_SUBSCRIBE!r} (JMRI turnout commands).\n"
-                f"  Accept MQTT: {CMD_TURNOUT_TOPIC}/<packed> payload THROWN|CLOSED, or "
-                f"{CMD_TURNOUT_TOPIC!r} with payload \"<packed> THROWN|CLOSED\".\n"
-                f"  Send serial: {CMD_TURNOUT_TOPIC}/<packed> THROWN|CLOSED (LF line)."
-            )
-            mqtt_sub_announced = True
+            _subscribe_line(_client, HEARTBEAT_MQTT_TOPIC, qos=1)
+        _subscribe_line(_client, CMD_TURNOUT_SUBSCRIBE, qos=1)
 
     def on_message(_client, userdata, msg):
         ping_q, turnout_q = userdata
@@ -357,11 +351,6 @@ def main() -> int:
 
     print(f"Connected to MQTT broker at {args.broker}")
     print(f"Opening {args.com} @ {args.baud} baud — Serial -> MQTT. Ctrl+C to stop.")
-    if heartbeat_on:
-        print(
-            f"Debug heartbeat ON: every {HEARTBEAT_INTERVAL_SEC:g}s send {HEARTBEAT_SERIAL_LINE!r} "
-            f"-> serial; publish replies to {HEARTBEAT_MQTT_TOPIC!r}"
-        )
 
     stop = False
 
