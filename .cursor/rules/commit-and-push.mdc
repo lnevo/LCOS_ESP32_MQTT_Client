@@ -1,0 +1,18 @@
+---
+description: Commit and push to origin after completing work
+alwaysApply: true
+---
+
+# Git: commit and push
+
+After you finish a task or a coherent set of edits in this repository:
+
+1. **Stage** all intended changes (`git add` as appropriate).
+2. **Commit** with a short, accurate message describing what changed and why.
+3. **Push** to `origin` on the current branch (`git push`).
+
+Do this **without waiting** for the user to ask, unless they explicitly asked to skip committing, leave changes uncommitted, or use a different workflow.
+
+If there is nothing to commit (working tree clean), skip.
+
+If `git push` fails (auth, network), report the error and what remains unpushed.
