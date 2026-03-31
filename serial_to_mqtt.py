@@ -6,13 +6,11 @@ Host companion for an Arduino Nano running the LCOS JMRI/MQTT bridge sketch (rep
 retains ESP32 historically). The Nano sends one line per message:  <topic><space><payload>\\n  (LF only).
 We publish each line to the MQTT broker with retain=True (same as mosquitto_pub -r).
 
-Optional debug heartbeat: every HEARTBEAT_INTERVAL_SEC, send HEARTBEAT_SERIAL_LINE to serial;
-Arduino ACKs and sends LCOS turnout CMD (HB node/UID in firmware). Turnout MQTT lines come only from
-real layout ops events on serial (confirmation), not from a synthetic publish after PING.
-When debug heartbeat is enabled (DEBUG_HEARTBEAT or --debug-heartbeat), we publish serial "ACK ..."
-lines to HEARTBEAT_MQTT_TOPIC and subscribe to that topic: payload PING is relayed to serial. Arduino
-replies with ACK PING; that payload does not re-trigger serial. With heartbeat off, we do not subscribe
-to HEARTBEAT_MQTT_TOPIC and do not republish ACK lines there.
+Optional debug heartbeat (DEBUG_HEARTBEAT or --debug-heartbeat): periodically sends PING on serial;
+the sketch ACKs. Inbound MQTT on HEARTBEAT_MQTT_TOPIC with payload PING is forwarded to serial;
+serial ACK lines are published to that topic. Retained MQTT messages are skipped. With heartbeat off,
+none of that runs. Turnout state on MQTT still comes only from real layout traffic on the serial
+lines, not from the heartbeat path.
 
 On MQTT connect we publish BRIDGE_STATUS_ONLINE to track/bridge/status (retained). On clean exit we
 publish BRIDGE_STATUS_OFFLINE (best-effort before disconnect).
@@ -219,8 +217,8 @@ def main() -> int:
         "--debug-heartbeat",
         "--hb",
         action="store_true",
-        help="Enable heartbeat: MQTT subscribe to heartbeat topic, periodic PING to serial, "
-        "and republish ACK lines (or set DEBUG_HEARTBEAT = True in script)",
+        help="Debug heartbeat: PING serial on an interval; MQTT PING->serial; serial ACK->MQTT "
+        "(also DEBUG_HEARTBEAT in script)",
     )
     args = ap.parse_args()
 
