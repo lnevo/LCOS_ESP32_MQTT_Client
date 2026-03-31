@@ -9,10 +9,10 @@ We publish each line to the MQTT broker with retain=True (same as mosquitto_pub 
 Optional debug heartbeat: every HEARTBEAT_INTERVAL_SEC, send HEARTBEAT_SERIAL_LINE to serial;
 Arduino ACKs and sends LCOS turnout CMD (HB node/UID in firmware). Turnout MQTT lines come only from
 real layout ops events on serial (confirmation), not from a synthetic publish after PING.
-We publish the "ACK ..." line to HEARTBEAT_MQTT_TOPIC (see DEBUG_HEARTBEAT).
-
-We always subscribe to HEARTBEAT_MQTT_TOPIC: payload exactly PING is relayed to serial (same bytes as
-heartbeat). Arduino replies with ACK PING on that topic; that payload does not re-trigger serial.
+When debug heartbeat is enabled (DEBUG_HEARTBEAT or --debug-heartbeat), we publish serial "ACK ..."
+lines to HEARTBEAT_MQTT_TOPIC and subscribe to that topic: payload PING is relayed to serial. Arduino
+replies with ACK PING; that payload does not re-trigger serial. With heartbeat off, we do not subscribe
+to HEARTBEAT_MQTT_TOPIC and do not republish ACK lines there.
 
 On MQTT connect we publish BRIDGE_STATUS_ONLINE to track/bridge/status (retained). On clean exit we
 publish BRIDGE_STATUS_OFFLINE (best-effort before disconnect).
@@ -131,10 +131,11 @@ def _publish_heartbeat_ack_if_present(
     client: mqtt.Client,
     stripped_line: str,
     *,
+    heartbeat_on: bool,
     verbose: bool,
 ) -> bool:
-    """Publish ACK lines from serial to heartbeat topic."""
-    if not stripped_line.startswith("ACK "):
+    """Publish ACK lines from serial to heartbeat topic (only when heartbeat feature is enabled)."""
+    if not heartbeat_on or not stripped_line.startswith("ACK "):
         return False
     client.publish(HEARTBEAT_MQTT_TOPIC, stripped_line, qos=0, retain=True)
     if verbose:
@@ -148,6 +149,7 @@ def _handle_serial_text_line(
     *,
     debug: bool,
     verbose: bool,
+    heartbeat_on: bool,
 ) -> None:
     """Handle one decoded serial text line and route to MQTT/logging."""
     stripped = line.strip("\r\n")
@@ -167,7 +169,9 @@ def _handle_serial_text_line(
             print(f"TX -> {topic} {payload}")
         return
 
-    _publish_heartbeat_ack_if_present(client, stripped, verbose=verbose)
+    _publish_heartbeat_ack_if_present(
+        client, stripped, heartbeat_on=heartbeat_on, verbose=verbose
+    )
 
 
 def _turnout_state_payload_ok(payload: str) -> bool:
@@ -215,7 +219,8 @@ def main() -> int:
         "--debug-heartbeat",
         "--hb",
         action="store_true",
-        help="Enable serial heartbeat + MQTT publish of ACK replies (or set DEBUG_HEARTBEAT = True in script)",
+        help="Enable heartbeat: MQTT subscribe to heartbeat topic, periodic PING to serial, "
+        "and republish ACK lines (or set DEBUG_HEARTBEAT = True in script)",
     )
     args = ap.parse_args()
 
@@ -232,14 +237,16 @@ def main() -> int:
         nonlocal mqtt_sub_announced
         if not _mqtt_connect_ok(reason_code):
             return
-        _client.subscribe(HEARTBEAT_MQTT_TOPIC, qos=1)
+        if heartbeat_on:
+            _client.subscribe(HEARTBEAT_MQTT_TOPIC, qos=1)
         # Covers track/cmd/turnout (flat) and track/cmd/turnout/<packed> (JMRI); one subscription.
         _client.subscribe(CMD_TURNOUT_SUBSCRIBE, qos=1)
         if not mqtt_sub_announced:
-            print(
-                f"Subscribed to {HEARTBEAT_MQTT_TOPIC!r} — MQTT payload PING -> serial "
-                f"{HEARTBEAT_SERIAL_LINE!r}"
-            )
+            if heartbeat_on:
+                print(
+                    f"Subscribed to {HEARTBEAT_MQTT_TOPIC!r} — MQTT payload PING -> serial "
+                    f"{HEARTBEAT_SERIAL_LINE!r}"
+                )
             print(
                 f"Subscribed to {CMD_TURNOUT_SUBSCRIBE!r} — "
                 f"topic {CMD_TURNOUT_TOPIC!r}/<packed> payload THROWN|CLOSED, "
@@ -250,7 +257,7 @@ def main() -> int:
 
     def on_message(_client, userdata, msg):
         ping_q, turnout_q = userdata
-        if msg.topic == HEARTBEAT_MQTT_TOPIC:
+        if heartbeat_on and msg.topic == HEARTBEAT_MQTT_TOPIC:
             try:
                 payload = msg.payload.decode("utf-8", errors="replace").strip()
             except Exception:
@@ -420,7 +427,13 @@ def main() -> int:
                     line = raw.decode("utf-8", errors="replace")
                 except Exception:
                     continue
-                _handle_serial_text_line(client, line, debug=args.debug, verbose=args.verbose)
+                _handle_serial_text_line(
+                    client,
+                    line,
+                    debug=args.debug,
+                    verbose=args.verbose,
+                    heartbeat_on=heartbeat_on,
+                )
             except serial.SerialException as e:
                 print(f"Serial error: {e}", file=sys.stderr)
                 time.sleep(0.5)
