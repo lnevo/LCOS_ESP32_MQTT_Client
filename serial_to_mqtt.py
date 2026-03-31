@@ -127,6 +127,49 @@ def parse_line(line: str) -> tuple[str, str] | None:
     return topic, payload
 
 
+def _publish_heartbeat_ack_if_present(
+    client: mqtt.Client,
+    stripped_line: str,
+    *,
+    verbose: bool,
+) -> bool:
+    """Publish ACK lines from serial to heartbeat topic."""
+    if not stripped_line.startswith("ACK "):
+        return False
+    client.publish(HEARTBEAT_MQTT_TOPIC, stripped_line, qos=0, retain=True)
+    if verbose:
+        print(f"TX -> {HEARTBEAT_MQTT_TOPIC} {stripped_line}")
+    return True
+
+
+def _handle_serial_text_line(
+    client: mqtt.Client,
+    line: str,
+    *,
+    debug: bool,
+    verbose: bool,
+) -> None:
+    """Handle one decoded serial text line and route to MQTT/logging."""
+    stripped = line.strip("\r\n")
+    if not stripped:
+        return
+
+    if stripped.startswith("DBG "):
+        if debug:
+            print(stripped)
+        return
+
+    parsed = parse_line(line)
+    if parsed is not None:
+        topic, payload = parsed
+        client.publish(topic, payload, qos=0, retain=True)
+        if verbose:
+            print(f"TX -> {topic} {payload}")
+        return
+
+    _publish_heartbeat_ack_if_present(client, stripped, verbose=verbose)
+
+
 def _turnout_state_payload_ok(payload: str) -> bool:
     return bool(_TURNOUT_STATE_RE.match(payload.strip()))
 
@@ -377,25 +420,7 @@ def main() -> int:
                     line = raw.decode("utf-8", errors="replace")
                 except Exception:
                     continue
-                stripped = line.strip("\r\n")
-
-                if stripped.startswith("DBG "):
-                    if args.debug:
-                        print(stripped)
-                    continue
-
-                parsed = parse_line(line)
-                if parsed is not None:
-                    topic, payload = parsed
-                    client.publish(topic, payload, qos=0, retain=True)
-                    if args.verbose:
-                        print(f"TX -> {topic} {payload}")
-                    continue
-
-                if heartbeat_on and stripped.startswith("ACK "):
-                    client.publish(HEARTBEAT_MQTT_TOPIC, stripped, qos=0, retain=True)
-                    if args.verbose:
-                        print(f"TX -> {HEARTBEAT_MQTT_TOPIC} {stripped}")
+                _handle_serial_text_line(client, line, debug=args.debug, verbose=args.verbose)
             except serial.SerialException as e:
                 print(f"Serial error: {e}", file=sys.stderr)
                 time.sleep(0.5)
