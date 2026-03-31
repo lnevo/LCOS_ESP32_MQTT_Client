@@ -6,8 +6,8 @@
 #include "lcos_mqtt_bridge.h"
 #include "gateways.h"
 
-/* Must match serial_to_mqtt.py CMD_TURNOUT_TOPIC and MQTT_TOPIC_CMD_TURNOUT in mqtt_serial.h */
-#define CMD_TURNOUT_PREFIX "track/cmd/turnout "
+/* Must match serial_to_mqtt.py CMD_TURNOUT_TOPIC + "/" and MQTT_TOPIC_CMD_TURNOUT in mqtt_serial.h */
+#define CMD_TURNOUT_PREFIX "track/cmd/turnout/"
 #define CMD_TURNOUT_PREFIX_LEN (sizeof(CMD_TURNOUT_PREFIX) - 1)
 
 static bool streq_ci(const char *a, const char *b) {

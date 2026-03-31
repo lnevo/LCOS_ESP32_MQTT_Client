@@ -22,7 +22,7 @@ struct DATAGRAM;  // forward decl; include lcos.h in .cpp
 //   Sensor topic (button/switch): uid = UID_OFFSET_CONTROL_OBJECTS + data0 (data0 = index → 67–82).
 //   Signal mast topic: uid = UID_OFFSET_SIGNALS + data0 (data0 = signal index → 32–47).
 #define MQTT_TOPIC_TURNOUT   "track/turnout/"
-/** Serial line prefix; MQTT subscribe track/cmd/turnout/# (topic …/turnout/<packed>, payload THROWN|CLOSED). */
+/** Base for cmd serial line: "track/cmd/turnout/<packed> THROWN|CLOSED\\n"; MQTT subscribe track/cmd/turnout/# */
 #define MQTT_TOPIC_CMD_TURNOUT "track/cmd/turnout"
 #define MQTT_TOPIC_SENSOR    "track/sensor/"
 #define MQTT_TOPIC_LIGHT     "track/light/"

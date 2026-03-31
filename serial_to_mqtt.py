@@ -19,7 +19,7 @@ publish BRIDGE_STATUS_OFFLINE (best-effort before disconnect).
 
 Turnout commands: subscribe to track/cmd/turnout/# (JMRI: topic track/cmd/turnout/<packed>, payload
 THROWN or CLOSED). Optionally still accept flat topic track/cmd/turnout with payload "<packed> THROWN".
-Serial to the Nano is always "track/cmd/turnout <packed> THROWN|CLOSED\\n".
+Serial to the Nano is always "track/cmd/turnout/<packed> THROWN|CLOSED\\n" (same shape as JMRI topic + payload).
 
 Usage:
   Windows:  run_serial_mqtt.cmd [-h|/?|...] [verbose] [debug] [heartbeat] [-- python-args...]
@@ -251,7 +251,7 @@ def main() -> int:
                 f"Subscribed to {CMD_TURNOUT_SUBSCRIBE!r} — "
                 f"topic {CMD_TURNOUT_TOPIC!r}/<packed> payload THROWN|CLOSED, "
                 f"or flat {CMD_TURNOUT_TOPIC!r} payload '<packed> THROWN|CLOSED'; "
-                f"serial: {CMD_TURNOUT_TOPIC!r} <packed> …"
+                f"serial: {CMD_TURNOUT_TOPIC!r}/<packed> …"
             )
             mqtt_sub_announced = True
 
@@ -307,7 +307,7 @@ def main() -> int:
                         f"THROWN or CLOSED only; decoded={body!r}"
                     )
                 return
-            serial_payload = f"{packed} {body}"
+            state = body
         else:
             if not _turnout_flat_payload_ok(body):
                 if args.verbose:
@@ -316,8 +316,10 @@ def main() -> int:
                         f"'<packed> CLOSED', e.g. '408 THROWN': decoded={body!r}"
                     )
                 return
-            serial_payload = body
-        line = f"{CMD_TURNOUT_TOPIC} {serial_payload}\n".encode("utf-8")
+            _flat_parts = body.split(None, 1)
+            packed = _flat_parts[0]
+            state = _flat_parts[1]
+        line = f"{CMD_TURNOUT_TOPIC}/{packed} {state}\n".encode("utf-8")
         if not isinstance(turnout_q, queue.Queue):
             if args.verbose:
                 print("MQTT turnout cmd: internal error (bad queue)", file=sys.stderr)
