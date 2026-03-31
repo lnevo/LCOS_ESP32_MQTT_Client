@@ -14,6 +14,9 @@ We publish the "ACK ..." line to HEARTBEAT_MQTT_TOPIC (see DEBUG_HEARTBEAT).
 We always subscribe to HEARTBEAT_MQTT_TOPIC: payload exactly PING is relayed to serial (same bytes as
 heartbeat). Arduino replies with ACK PING on that topic; that payload does not re-trigger serial.
 
+On MQTT connect we publish BRIDGE_STATUS_ONLINE to track/bridge/status (retained). On clean exit we
+publish BRIDGE_STATUS_OFFLINE (best-effort before disconnect).
+
 Usage:
   Windows:  run_serial_mqtt.cmd [-h|/?|...] [verbose] [debug] [heartbeat] [-- python-args...]
             python serial_to_mqtt.py --com COM3 --broker ...
@@ -66,6 +69,32 @@ HEARTBEAT_INTERVAL_SEC = 10.0
 HEARTBEAT_SERIAL_LINE = b"PING\n"
 # MQTT topic for the raw serial reply (e.g. "ACK PING").
 HEARTBEAT_MQTT_TOPIC = "track/bridge/heartbeat"
+
+# Host bridge presence: same topic for startup and shutdown (retained; QoS 1).
+BRIDGE_STATUS_TOPIC = "track/bridge/status"
+BRIDGE_STATUS_ONLINE = "online"
+BRIDGE_STATUS_OFFLINE = "offline"
+
+
+def _publish_bridge_status(
+    client: mqtt.Client,
+    payload: str,
+    *,
+    verbose: bool,
+) -> bool:
+    """Publish lifecycle payload to BRIDGE_STATUS_TOPIC. Returns True if publish completed."""
+    try:
+        info = client.publish(BRIDGE_STATUS_TOPIC, payload, qos=1, retain=True)
+        if hasattr(info, "wait_for_publish"):
+            info.wait_for_publish(timeout=5.0)
+        else:
+            time.sleep(0.2)
+        if verbose:
+            print(f"TX -> {BRIDGE_STATUS_TOPIC} {payload}")
+        return True
+    except Exception as e:
+        print(f"MQTT bridge status publish failed ({payload!r}): {e}", file=sys.stderr)
+        return False
 
 
 def parse_line(line: str) -> tuple[str, str] | None:
@@ -173,14 +202,12 @@ def main() -> int:
 
     client.loop_start()
 
+    bridge_online_published = False
     try:
-        info = client.publish("track/test", "ping", qos=1, retain=False)
-        if hasattr(info, "wait_for_publish"):
-            info.wait_for_publish(timeout=5.0)
-        else:
-            time.sleep(0.2)
+        _publish_bridge_status(client, BRIDGE_STATUS_ONLINE, verbose=args.verbose)
+        bridge_online_published = True
     except Exception as e:
-        print(f"MQTT publish test failed: {e}", file=sys.stderr)
+        print(f"MQTT bridge startup publish failed: {e}", file=sys.stderr)
         client.loop_stop()
         client.disconnect()
         return 1
@@ -203,6 +230,8 @@ def main() -> int:
     _sigbreak = getattr(signal, "SIGBREAK", None)
     if _sigbreak is not None:
         signal.signal(_sigbreak, on_sigint)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, on_sigint)
 
     try:
         ser = serial.Serial(
@@ -215,6 +244,8 @@ def main() -> int:
         )
     except serial.SerialException as e:
         print(f"Serial open failed: {e}", file=sys.stderr)
+        if bridge_online_published:
+            _publish_bridge_status(client, BRIDGE_STATUS_OFFLINE, verbose=args.verbose)
         client.loop_stop()
         client.disconnect()
         return 1
@@ -272,6 +303,8 @@ def main() -> int:
                 print(f"Serial error: {e}", file=sys.stderr)
                 time.sleep(0.5)
     finally:
+        if bridge_online_published:
+            _publish_bridge_status(client, BRIDGE_STATUS_OFFLINE, verbose=args.verbose)
         ser.close()
         client.loop_stop()
         client.disconnect()
