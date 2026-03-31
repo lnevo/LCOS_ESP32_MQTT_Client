@@ -9,6 +9,62 @@
 #include <Arduino.h>
 #include <lcos.h>
 
+/* Older Arduino Library Manager lcos may lack these; values match lcos/lcos.h v1.0.10. */
+#ifndef INCLUDE_NODE_EVENTS
+#define INCLUDE_NODE_EVENTS 1
+#endif
+#ifndef INCLUDE_TURNOUT_EVENTS
+#define INCLUDE_TURNOUT_EVENTS 2
+#endif
+#ifndef INCLUDE_SIGNAL_EVENTS
+#define INCLUDE_SIGNAL_EVENTS 4
+#endif
+#ifndef INCLUDE_BLOCK_EVENTS
+#define INCLUDE_BLOCK_EVENTS 8
+#endif
+#ifndef INCLUDE_CROSSING_EVENTS
+#define INCLUDE_CROSSING_EVENTS 16
+#endif
+#ifndef INCLUDE_TURNTABLE_EVENTS
+#define INCLUDE_TURNTABLE_EVENTS 32
+#endif
+#ifndef INCLUDE_SCENE_EVENTS
+#define INCLUDE_SCENE_EVENTS 64
+#endif
+#ifndef INCLUDE_TRACK_POWER_EVENTS
+#define INCLUDE_TRACK_POWER_EVENTS 128
+#endif
+#ifndef INCLUDE_BUTTON_EVENTS
+#define INCLUDE_BUTTON_EVENTS 1024
+#endif
+#ifndef INCLUDE_SWITCH_EVENTS
+#define INCLUDE_SWITCH_EVENTS 2048
+#endif
+#ifndef INCLUDE_SENSOR_EVENTS
+#define INCLUDE_SENSOR_EVENTS 4096
+#endif
+#ifndef ALIGN_NONE
+#define ALIGN_NONE 0
+#endif
+#ifndef ALIGN_MAIN
+#define ALIGN_MAIN 1
+#endif
+#ifndef ALIGN_CLOSED
+#define ALIGN_CLOSED 1
+#endif
+#ifndef ALIGN_DIVERGENT
+#define ALIGN_DIVERGENT 2
+#endif
+#ifndef ALIGN_THROWN
+#define ALIGN_THROWN 2
+#endif
+#ifndef ALIGN_ANY
+#define ALIGN_ANY 3
+#endif
+#ifndef ALIGN_TOGGLE
+#define ALIGN_TOGGLE 3
+#endif
+
 class gateway;
 
 /*
