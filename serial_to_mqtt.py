@@ -240,7 +240,7 @@ def main() -> int:
             st = "ok" if rc == ok else f"failed (rc={rc})"
         else:
             st = "ok" if not getattr(rc, "is_failure", True) else "failed"
-        print(f"subscribe {topic!r}: {st}")
+        print(f"Subscribe {topic!r}: {st}")
 
     def on_connect(_client, _userdata, _flags, reason_code, _properties=None):
         if not _mqtt_connect_ok(reason_code):
