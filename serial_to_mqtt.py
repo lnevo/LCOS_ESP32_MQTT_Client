@@ -206,19 +206,44 @@ def main() -> int:
                 pass
             return
         if msg.topic == CMD_TURNOUT_TOPIC:
+            if args.verbose:
+                qos = getattr(msg, "qos", "?")
+                ret = getattr(msg, "retain", "?")
+                print(
+                    f"MQTT RX turnout cmd topic={msg.topic!r} qos={qos} retain={ret} "
+                    f"raw_bytes={msg.payload!r}"
+                )
             try:
                 payload = msg.payload.decode("utf-8", errors="replace").strip()
-            except Exception:
+            except Exception as e:
+                if args.verbose:
+                    print(f"MQTT turnout cmd: UTF-8 decode failed: {e}", file=sys.stderr)
                 return
             if not _turnout_cmd_payload_ok(payload):
+                if args.verbose:
+                    print(
+                        "MQTT turnout cmd rejected (expected '<packed> THROWN' or '<packed> CLOSED', "
+                        f"e.g. '408 THROWN'): decoded={payload!r}"
+                    )
                 return
             line = f"{CMD_TURNOUT_TOPIC} {payload}\n".encode("utf-8")
             if not isinstance(turnout_q, queue.Queue):
+                if args.verbose:
+                    print("MQTT turnout cmd: internal error (bad queue)", file=sys.stderr)
                 return
             try:
                 turnout_q.put_nowait(line)
+                if args.verbose:
+                    print(
+                        "MQTT turnout cmd queued for serial: "
+                        f"{line.decode('utf-8', errors='replace').rstrip()!r}"
+                    )
             except queue.Full:
-                pass
+                if args.verbose:
+                    print(
+                        "MQTT turnout cmd: serial queue full (drop); increase drain rate or queue size",
+                        file=sys.stderr,
+                    )
 
     client.on_connect = on_connect
     client.on_message = on_message
