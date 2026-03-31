@@ -1,9 +1,61 @@
 /**
  * LCOS JMRI/MQTT bridge implementation (see lcos_mqtt_bridge.h).
  */
+#include <stdlib.h>
 #include <string.h>
 #include "lcos_mqtt_bridge.h"
 #include "gateways.h"
+
+/* Must match serial_to_mqtt.py CMD_TURNOUT_TOPIC and MQTT_TOPIC_CMD_TURNOUT in mqtt_serial.h */
+#define CMD_TURNOUT_PREFIX "track/cmd/turnout "
+#define CMD_TURNOUT_PREFIX_LEN (sizeof(CMD_TURNOUT_PREFIX) - 1)
+
+static bool streq_ci(const char *a, const char *b) {
+  for (; *a && *b; a++, b++) {
+    char ca = *a;
+    char cb = *b;
+    if (ca >= 'a' && ca <= 'z') {
+      ca = (char)(ca - 32);
+    }
+    if (cb >= 'a' && cb <= 'z') {
+      cb = (char)(cb - 32);
+    }
+    if (ca != cb) {
+      return false;
+    }
+  }
+  return *a == *b;
+}
+
+static void handleTurnoutCmdFromSerialLine(lcos_layout *layout, const char *rest) {
+  if (layout == NULL || rest == NULL) {
+    return;
+  }
+  char *end = NULL;
+  unsigned long packed_ul = strtoul(rest, &end, 10);
+  if (end == rest) {
+    return;
+  }
+  while (*end == ' ') {
+    end++;
+  }
+  if (*end == '\0') {
+    return;
+  }
+  uint16_t node = (uint16_t)(packed_ul / 100u);
+  byte uid = (byte)(packed_ul % 100u);
+  byte align;
+  if (streq_ci(end, "CLOSED")) {
+    align = (byte)ALIGN_CLOSED;
+  } else if (streq_ci(end, "THROWN")) {
+    align = (byte)ALIGN_THROWN;
+  } else {
+    return;
+  }
+  layout->sendShortMessage(false, node, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
+    uid, LCOS_CMD_SET_STATE_NO_LOCK, align, 0);
+  layout->update();
+}
 
 /* Event 125 subscription mask — INCLUDE_* bits from lcos.h */
 #define SUBSCRIBE_EVENT_MASK (INCLUDE_BLOCK_EVENTS | INCLUDE_TURNOUT_EVENTS | INCLUDE_SIGNAL_EVENTS \
@@ -49,7 +101,10 @@ static void pollSerialTextLineForAck(lcos_layout *layout) {
       if (s_serialLineLen > 0) {
         Serial.print(F("ACK "));
         Serial.println(s_serialLineBuf);
-        if (layout != NULL && strcmp(s_serialLineBuf, HB_SERIAL_TOKEN) == 0) {
+        if (layout != NULL && strncmp(s_serialLineBuf, CMD_TURNOUT_PREFIX, CMD_TURNOUT_PREFIX_LEN) == 0
+            && s_serialLineBuf[CMD_TURNOUT_PREFIX_LEN] != '\0') {
+          handleTurnoutCmdFromSerialLine(layout, s_serialLineBuf + CMD_TURNOUT_PREFIX_LEN);
+        } else if (layout != NULL && strcmp(s_serialLineBuf, HB_SERIAL_TOKEN) == 0) {
           /* Unicast to the turnout owner: multicast=true only sends to master (00) per LCMNetwork::emitEvent. */
           /* Turnout CMD: data1 = command request, data2 = ALIGN_*; see lcos_mqtt_bridge.h / README LCOS API table. */
           layout->sendShortMessage(false, HB_TURNOUT_NODE, ETYPE_OPERATING, EVENT_TURNOUT_CMD,

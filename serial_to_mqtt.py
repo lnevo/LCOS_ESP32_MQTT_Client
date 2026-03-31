@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import queue
+import re
 import signal
 import sys
 import time
@@ -75,6 +76,10 @@ BRIDGE_STATUS_TOPIC = "track/bridge/status"
 BRIDGE_STATUS_ONLINE = "online"
 BRIDGE_STATUS_OFFLINE = "offline"
 
+# JMRI -> bridge -> serial -> LCOS (distinct from state topic track/turnout/<packed>).
+CMD_TURNOUT_TOPIC = "track/cmd/turnout"
+_TURNOUT_CMD_PAYLOAD_RE = re.compile(r"^\d+\s+(THROWN|CLOSED)\s*$", re.IGNORECASE)
+
 
 def _publish_bridge_status(
     client: mqtt.Client,
@@ -111,6 +116,10 @@ def parse_line(line: str) -> tuple[str, str] | None:
     if not payload:
         return None
     return topic, payload
+
+
+def _turnout_cmd_payload_ok(payload: str) -> bool:
+    return bool(_TURNOUT_CMD_PAYLOAD_RE.match(payload.strip()))
 
 
 def _mqtt_connect_ok(reason_code: object) -> bool:
@@ -157,39 +166,59 @@ def main() -> int:
     heartbeat_on = bool(DEBUG_HEARTBEAT or args.debug_heartbeat)
 
     ping_cmd_queue: queue.Queue[object] = queue.Queue(maxsize=32)
-    mqtt_heartbeat_sub_announced = False
+    turnout_cmd_queue: queue.Queue[bytes] = queue.Queue(maxsize=32)
+    mqtt_sub_announced = False
 
     client = _make_mqtt_client()
-    client.user_data_set(ping_cmd_queue)
+    client.user_data_set((ping_cmd_queue, turnout_cmd_queue))
 
     def on_connect(_client, _userdata, _flags, reason_code, _properties=None):
-        nonlocal mqtt_heartbeat_sub_announced
+        nonlocal mqtt_sub_announced
         if not _mqtt_connect_ok(reason_code):
             return
         _client.subscribe(HEARTBEAT_MQTT_TOPIC, qos=1)
-        if not mqtt_heartbeat_sub_announced:
+        _client.subscribe(CMD_TURNOUT_TOPIC, qos=1)
+        if not mqtt_sub_announced:
             print(
                 f"Subscribed to {HEARTBEAT_MQTT_TOPIC!r} — MQTT payload PING -> serial "
                 f"{HEARTBEAT_SERIAL_LINE!r}"
             )
-            mqtt_heartbeat_sub_announced = True
+            print(
+                f"Subscribed to {CMD_TURNOUT_TOPIC!r} — payload '<packed> THROWN|CLOSED' -> serial "
+                f'(line "{CMD_TURNOUT_TOPIC} ...")'
+            )
+            mqtt_sub_announced = True
 
     def on_message(_client, userdata, msg):
-        if msg.topic != HEARTBEAT_MQTT_TOPIC:
+        ping_q, turnout_q = userdata
+        if msg.topic == HEARTBEAT_MQTT_TOPIC:
+            try:
+                payload = msg.payload.decode("utf-8", errors="replace").strip()
+            except Exception:
+                return
+            if payload != "PING":
+                return
+            if not isinstance(ping_q, queue.Queue):
+                return
+            try:
+                ping_q.put_nowait(True)
+            except queue.Full:
+                pass
             return
-        try:
-            payload = msg.payload.decode("utf-8", errors="replace").strip()
-        except Exception:
-            return
-        if payload != "PING":
-            return
-        q = userdata
-        if not isinstance(q, queue.Queue):
-            return
-        try:
-            q.put_nowait(True)
-        except queue.Full:
-            pass
+        if msg.topic == CMD_TURNOUT_TOPIC:
+            try:
+                payload = msg.payload.decode("utf-8", errors="replace").strip()
+            except Exception:
+                return
+            if not _turnout_cmd_payload_ok(payload):
+                return
+            line = f"{CMD_TURNOUT_TOPIC} {payload}\n".encode("utf-8")
+            if not isinstance(turnout_q, queue.Queue):
+                return
+            try:
+                turnout_q.put_nowait(line)
+            except queue.Full:
+                pass
 
     client.on_connect = on_connect
     client.on_message = on_message
@@ -202,12 +231,8 @@ def main() -> int:
 
     client.loop_start()
 
-    bridge_online_published = False
-    try:
-        _publish_bridge_status(client, BRIDGE_STATUS_ONLINE, verbose=args.verbose)
-        bridge_online_published = True
-    except Exception as e:
-        print(f"MQTT bridge startup publish failed: {e}", file=sys.stderr)
+    bridge_online_published = _publish_bridge_status(client, BRIDGE_STATUS_ONLINE, verbose=args.verbose)
+    if not bridge_online_published:
         client.loop_stop()
         client.disconnect()
         return 1
@@ -255,6 +280,16 @@ def main() -> int:
     try:
         while not stop:
             try:
+                while True:
+                    try:
+                        line_out = turnout_cmd_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    ser.write(line_out)
+                    ser.flush()
+                    if args.verbose:
+                        print(f"MQTT -> serial {line_out!r}")
+
                 while True:
                     try:
                         ping_cmd_queue.get_nowait()

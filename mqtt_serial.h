@@ -22,6 +22,8 @@ struct DATAGRAM;  // forward decl; include lcos.h in .cpp
 //   Sensor topic (button/switch): uid = UID_OFFSET_CONTROL_OBJECTS + data0 (data0 = index → 67–82).
 //   Signal mast topic: uid = UID_OFFSET_SIGNALS + data0 (data0 = signal index → 32–47).
 #define MQTT_TOPIC_TURNOUT   "track/turnout/"
+/** JMRI -> host -> serial: packed address + THROWN|CLOSED (see serial_to_mqtt.py, lcos_mqtt_bridge.cpp). */
+#define MQTT_TOPIC_CMD_TURNOUT "track/cmd/turnout"
 #define MQTT_TOPIC_SENSOR    "track/sensor/"
 #define MQTT_TOPIC_LIGHT     "track/light/"
 #define MQTT_TOPIC_SIGNALMAST "track/signalmast/"
