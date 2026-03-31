@@ -17,6 +17,10 @@ heartbeat). Arduino replies with ACK PING on that topic; that payload does not r
 On MQTT connect we publish BRIDGE_STATUS_ONLINE to track/bridge/status (retained). On clean exit we
 publish BRIDGE_STATUS_OFFLINE (best-effort before disconnect).
 
+Turnout commands: subscribe to track/cmd/turnout/# (JMRI: topic track/cmd/turnout/<packed>, payload
+THROWN or CLOSED). Optionally still accept flat topic track/cmd/turnout with payload "<packed> THROWN".
+Serial to the Nano is always "track/cmd/turnout <packed> THROWN|CLOSED\\n".
+
 Usage:
   Windows:  run_serial_mqtt.cmd [-h|/?|...] [verbose] [debug] [heartbeat] [-- python-args...]
             python serial_to_mqtt.py --com COM3 --broker ...
@@ -78,7 +82,12 @@ BRIDGE_STATUS_OFFLINE = "offline"
 
 # JMRI -> bridge -> serial -> LCOS (distinct from state topic track/turnout/<packed>).
 CMD_TURNOUT_TOPIC = "track/cmd/turnout"
-_TURNOUT_CMD_PAYLOAD_RE = re.compile(r"^\d+\s+(THROWN|CLOSED)\s*$", re.IGNORECASE)
+# Wildcard subscription: receive track/cmd/turnout/408, payload THROWN|CLOSED (JMRI-style).
+CMD_TURNOUT_SUBSCRIBE = "track/cmd/turnout/#"
+_TURNOUT_HIER_TOPIC_RE = re.compile(r"^track/cmd/turnout/(\d+)$")
+_TURNOUT_STATE_RE = re.compile(r"^(THROWN|CLOSED)\s*$", re.IGNORECASE)
+# Legacy: single topic track/cmd/turnout, payload "408 THROWN".
+_TURNOUT_FLAT_PAYLOAD_RE = re.compile(r"^\d+\s+(THROWN|CLOSED)\s*$", re.IGNORECASE)
 
 
 def _publish_bridge_status(
@@ -118,8 +127,12 @@ def parse_line(line: str) -> tuple[str, str] | None:
     return topic, payload
 
 
-def _turnout_cmd_payload_ok(payload: str) -> bool:
-    return bool(_TURNOUT_CMD_PAYLOAD_RE.match(payload.strip()))
+def _turnout_state_payload_ok(payload: str) -> bool:
+    return bool(_TURNOUT_STATE_RE.match(payload.strip()))
+
+
+def _turnout_flat_payload_ok(payload: str) -> bool:
+    return bool(_TURNOUT_FLAT_PAYLOAD_RE.match(payload.strip()))
 
 
 def _mqtt_connect_ok(reason_code: object) -> bool:
@@ -177,15 +190,18 @@ def main() -> int:
         if not _mqtt_connect_ok(reason_code):
             return
         _client.subscribe(HEARTBEAT_MQTT_TOPIC, qos=1)
-        _client.subscribe(CMD_TURNOUT_TOPIC, qos=1)
+        # Covers track/cmd/turnout (flat) and track/cmd/turnout/<packed> (JMRI); one subscription.
+        _client.subscribe(CMD_TURNOUT_SUBSCRIBE, qos=1)
         if not mqtt_sub_announced:
             print(
                 f"Subscribed to {HEARTBEAT_MQTT_TOPIC!r} — MQTT payload PING -> serial "
                 f"{HEARTBEAT_SERIAL_LINE!r}"
             )
             print(
-                f"Subscribed to {CMD_TURNOUT_TOPIC!r} — payload '<packed> THROWN|CLOSED' -> serial "
-                f'(line "{CMD_TURNOUT_TOPIC} ...")'
+                f"Subscribed to {CMD_TURNOUT_SUBSCRIBE!r} — "
+                f"topic {CMD_TURNOUT_TOPIC!r}/<packed> payload THROWN|CLOSED, "
+                f"or flat {CMD_TURNOUT_TOPIC!r} payload '<packed> THROWN|CLOSED'; "
+                f"serial: {CMD_TURNOUT_TOPIC!r} <packed> …"
             )
             mqtt_sub_announced = True
 
@@ -205,45 +221,66 @@ def main() -> int:
             except queue.Full:
                 pass
             return
-        if msg.topic == CMD_TURNOUT_TOPIC:
-            if args.verbose:
-                qos = getattr(msg, "qos", "?")
-                ret = getattr(msg, "retain", "?")
+        hier = _TURNOUT_HIER_TOPIC_RE.match(msg.topic)
+        is_flat = msg.topic == CMD_TURNOUT_TOPIC
+        if hier is None and not is_flat:
+            if args.verbose and msg.topic.startswith(f"{CMD_TURNOUT_TOPIC}/"):
                 print(
-                    f"MQTT RX turnout cmd topic={msg.topic!r} qos={qos} retain={ret} "
-                    f"raw_bytes={msg.payload!r}"
+                    f"MQTT turnout cmd ignored (topic must be {CMD_TURNOUT_TOPIC!r}/<digits>): "
+                    f"{msg.topic!r}",
+                    file=sys.stderr,
                 )
-            try:
-                payload = msg.payload.decode("utf-8", errors="replace").strip()
-            except Exception as e:
-                if args.verbose:
-                    print(f"MQTT turnout cmd: UTF-8 decode failed: {e}", file=sys.stderr)
-                return
-            if not _turnout_cmd_payload_ok(payload):
-                if args.verbose:
-                    print(
-                        "MQTT turnout cmd rejected (expected '<packed> THROWN' or '<packed> CLOSED', "
-                        f"e.g. '408 THROWN'): decoded={payload!r}"
-                    )
-                return
-            line = f"{CMD_TURNOUT_TOPIC} {payload}\n".encode("utf-8")
-            if not isinstance(turnout_q, queue.Queue):
-                if args.verbose:
-                    print("MQTT turnout cmd: internal error (bad queue)", file=sys.stderr)
-                return
-            try:
-                turnout_q.put_nowait(line)
+            return
+        if args.verbose:
+            qos = getattr(msg, "qos", "?")
+            ret = getattr(msg, "retain", "?")
+            print(
+                f"MQTT RX turnout cmd topic={msg.topic!r} qos={qos} retain={ret} "
+                f"raw_bytes={msg.payload!r}"
+            )
+        try:
+            body = msg.payload.decode("utf-8", errors="replace").strip()
+        except Exception as e:
+            if args.verbose:
+                print(f"MQTT turnout cmd: UTF-8 decode failed: {e}", file=sys.stderr)
+            return
+        if hier is not None:
+            packed = hier.group(1)
+            if not _turnout_state_payload_ok(body):
                 if args.verbose:
                     print(
-                        "MQTT turnout cmd queued for serial: "
-                        f"{line.decode('utf-8', errors='replace').rstrip()!r}"
+                        "MQTT turnout cmd rejected (hierarchical topic): expected payload "
+                        f"THROWN or CLOSED only; decoded={body!r}"
                     )
-            except queue.Full:
+                return
+            serial_payload = f"{packed} {body}"
+        else:
+            if not _turnout_flat_payload_ok(body):
                 if args.verbose:
                     print(
-                        "MQTT turnout cmd: serial queue full (drop); increase drain rate or queue size",
-                        file=sys.stderr,
+                        "MQTT turnout cmd rejected (flat topic): expected '<packed> THROWN' or "
+                        f"'<packed> CLOSED', e.g. '408 THROWN': decoded={body!r}"
                     )
+                return
+            serial_payload = body
+        line = f"{CMD_TURNOUT_TOPIC} {serial_payload}\n".encode("utf-8")
+        if not isinstance(turnout_q, queue.Queue):
+            if args.verbose:
+                print("MQTT turnout cmd: internal error (bad queue)", file=sys.stderr)
+            return
+        try:
+            turnout_q.put_nowait(line)
+            if args.verbose:
+                print(
+                    "MQTT turnout cmd queued for serial: "
+                    f"{line.decode('utf-8', errors='replace').rstrip()!r}"
+                )
+        except queue.Full:
+            if args.verbose:
+                print(
+                    "MQTT turnout cmd: serial queue full (drop); increase drain rate or queue size",
+                    file=sys.stderr,
+                )
 
     client.on_connect = on_connect
     client.on_message = on_message
