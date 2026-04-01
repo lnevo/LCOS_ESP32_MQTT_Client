@@ -18,10 +18,11 @@ run_serial_mqtt.sh — run serial_to_mqtt.py with defaults from SERIAL_PORT and 
 
   Help:  -h   -?   --help
 
-  Short options (combine as separate tokens: -v -d -hb):
-    -v     Verbose MQTT publishes
+  Short options (combine as separate tokens: -v -d -hb -r):
+    -v     Verbose MQTT publishes (--verbose)
     -d     Arduino DBG lines on console (--debug)
     -hb    Serial PING heartbeat + MQTT ACK (--debug-heartbeat)
+    -r     Apply retained turnout cmds (and heartbeat PING if -hb) on connect (--restore)
 
   Environment (optional):
     SERIAL_PORT   default /dev/ttyUSB0
@@ -55,6 +56,10 @@ while (($#)); do
       ;;
     -hb)
       ARGS+=(--debug-heartbeat)
+      shift
+      ;;
+    -r)
+      ARGS+=(--restore)
       shift
       ;;
     --)

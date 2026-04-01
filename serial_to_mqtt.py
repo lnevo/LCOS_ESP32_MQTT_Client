@@ -8,7 +8,9 @@ We publish each line to the MQTT broker with retain=True (same as mosquitto_pub 
 
 Optional debug heartbeat (DEBUG_HEARTBEAT or --debug-heartbeat): periodically sends PING on serial;
 the sketch ACKs. Inbound MQTT on HEARTBEAT_MQTT_TOPIC with payload PING is forwarded to serial;
-serial ACK lines are published to that topic. Retained MQTT messages are skipped. With heartbeat off,
+serial ACK lines are published to that topic. Retained MQTT messages are skipped by default
+(--restore / -r applies them: turnout cmds to serial, and retained PING on the heartbeat topic).
+With heartbeat off,
 none of that runs. Turnout state on MQTT still comes only from real layout traffic on the serial
 lines, not from the heartbeat path.
 
@@ -20,9 +22,9 @@ THROWN or CLOSED). Optionally still accept flat topic track/cmd/turnout with pay
 Serial to the Nano is always "track/cmd/turnout/<packed> THROWN|CLOSED\\n" (same shape as JMRI topic + payload).
 
 Usage:
-  Windows:  run_serial_mqtt.cmd [-h|/?|...] [verbose] [debug] [heartbeat] [-- python-args...]
+  Windows:  run_serial_mqtt.cmd [-h|/?|...] [verbose] [debug] [heartbeat] [restore] [-- python-args...]
             python serial_to_mqtt.py --com COM3 --broker ...
-  Linux:    ./run_serial_mqtt.sh [-h|-?|--help] [-v] [-d] [-hb] [-- extra python args]
+  Linux:    ./run_serial_mqtt.sh [-h|-?|--help] [-v] [-d] [-hb] [-r] [-- extra python args]
             SERIAL_PORT=/dev/ttyACM0 BROKER=... ./run_serial_mqtt.sh
 
 Requires: pip install -r requirements.txt. Setup: docs/serial_mqtt_windows.md, docs/serial_mqtt_linux.md.
@@ -199,8 +201,8 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(
         description="Serial (LCOS MQTT lines) -> MQTT broker",
-        epilog="Launchers: run_serial_mqtt.cmd (help -h /?; options: verbose debug heartbeat), "
-        "run_serial_mqtt.sh (-h -v -d -hb).",
+        epilog="Launchers: run_serial_mqtt.cmd (help -h /?; options: verbose debug heartbeat restore), "
+        "run_serial_mqtt.sh (-h -v -d -hb -r).",
     )
     ap.add_argument("--com", default=DEFAULT_COM, help=f"Serial port (default {DEFAULT_COM})")
     ap.add_argument("--baud", type=int, default=DEFAULT_BAUD, help=f"Baud rate (default {DEFAULT_BAUD})")
@@ -219,6 +221,12 @@ def main() -> int:
         action="store_true",
         help="Debug heartbeat: PING serial on an interval; MQTT PING->serial; serial ACK->MQTT "
         "(also DEBUG_HEARTBEAT in script)",
+    )
+    ap.add_argument(
+        "-r",
+        "--restore",
+        action="store_true",
+        help="Apply retained MQTT messages on subscribe (turnout cmds to serial; retained heartbeat PING if enabled)",
     )
     args = ap.parse_args()
 
@@ -250,7 +258,7 @@ def main() -> int:
     def on_message(_client, userdata, msg):
         ping_q, turnout_q = userdata
         if heartbeat_on and msg.topic == HEARTBEAT_MQTT_TOPIC:
-            if bool(getattr(msg, "retain", False)):
+            if not args.restore and bool(getattr(msg, "retain", False)):
                 return
             try:
                 payload = msg.payload.decode("utf-8", errors="replace").strip()
@@ -275,7 +283,7 @@ def main() -> int:
                     file=sys.stderr,
                 )
             return
-        if bool(getattr(msg, "retain", False)):
+        if not args.restore and bool(getattr(msg, "retain", False)):
             return
         if args.verbose:
             qos = getattr(msg, "qos", "?")

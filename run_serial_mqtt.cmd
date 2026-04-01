@@ -26,6 +26,10 @@ if /i "%~1"=="--debug" goto pdebug
 if /i "%~1"=="heartbeat" goto pheartbeat
 if /i "%~1"=="--debug-heartbeat" goto pheartbeat
 
+if /i "%~1"=="-r" goto prestore
+if /i "%~1"=="--restore" goto prestore
+if /i "%~1"=="restore" goto prestore
+
 if "!EXTRA!"=="" (set "EXTRA=%~1") else (set "EXTRA=!EXTRA! %~1")
 shift
 goto ploop
@@ -45,15 +49,21 @@ if "!EXTRA!"=="" (set "EXTRA=--debug-heartbeat") else (set "EXTRA=!EXTRA! --debu
 shift
 goto ploop
 
+:prestore
+if "!EXTRA!"=="" (set "EXTRA=--restore") else (set "EXTRA=!EXTRA! --restore")
+shift
+goto ploop
+
 :pmhelp
 echo run_serial_mqtt.cmd — run serial_to_mqtt.py with COM=%COM% BROKER=%BROKER%
 echo.
 echo  Help:  -h  -?  /h  /?  help
 echo.
-echo  Options ^(words only; CMD does not use -v / -hb^):
+echo  Options ^(words or -r / --restore^):
 echo    verbose      MQTT publish lines
 echo    debug        Arduino DBG ... on console
 echo    heartbeat    serial PING + MQTT ACK ^(--debug-heartbeat^)
+echo    restore      apply retained cmds on connect ^(-r / --restore^)
 echo.
 echo  Other tokens pass through ^(e.g. --com COM5 --broker 10.0.0.1^).
 echo  Python flags:  python serial_to_mqtt.py --help
