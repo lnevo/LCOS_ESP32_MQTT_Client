@@ -135,6 +135,14 @@ def guess_footprint_type(footprint: str) -> str:
     return "SMD"
 
 
+CAN_TRANSCEIVER_OBSOLETE_PN = "IFX1050GVI"
+CAN_TRANSCEIVER_ALTERNATES_NOTE = (
+    "IFX1050GVIOXUMA1 is no longer in production — prefer Microchip MCP2562FD-E/SN "
+    "(8-SOIC, DS20005284): VDD 4.5–5.5 V, VIO at MCU I/O (often 3.3 V); not a single-rail "
+    "3.3 V drop-in for TJA1051T/3. Alternates: TJA1057GT/3J, TCAN1051 — verify pins/supplies."
+)
+
+
 def resolve_cart_keys(extras: list[str], cart: dict[str, dict[str, str]]) -> dict[str, str] | None:
     if not extras:
         return None
@@ -240,6 +248,9 @@ def main() -> None:
             notes_parts.append("No match in saved cart — fill Manufacturer / Mfg Part # manually.")
         if not extras or not str(extras[0]).strip():
             notes_parts.append("No distributor # in KiCad BOM — match module manually (e.g. ESP32 devkit).")
+        extra_blob = " ".join(extras)
+        if CAN_TRANSCEIVER_OBSOLETE_PN in extra_blob.upper():
+            notes_parts.append(CAN_TRANSCEIVER_ALTERNATES_NOTE)
         notes: str = " ".join(notes_parts) if notes_parts else ""
 
         lines.append((idx, qty, designators, manufacturer, mpn, desc, fp, typ, notes))
