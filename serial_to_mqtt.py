@@ -90,6 +90,29 @@ _TURNOUT_STATE_RE = re.compile(r"^(THROWN|CLOSED)\s*$", re.IGNORECASE)
 _TURNOUT_FLAT_PAYLOAD_RE = re.compile(r"^\d+\s+(THROWN|CLOSED)\s*$", re.IGNORECASE)
 
 
+def packed_mqtt_lcos_node_validation_error(packed: str) -> str | None:
+    """
+    JMRI-style packed = display_node*100 + uid. Before sending a line to serial, ensure the
+    node part (packed // 100) is a valid "display" node: the decimal string must use only
+    octal digits 0–7, because firmware maps it to the RF24 address with strtoul(digits, 8).
+
+    Return None if valid; otherwise a short error message. Call this from any MQTT handler
+    that embeds a packed address and forwards to serial, so bad addresses never leave Python.
+    """
+    if not packed:
+        return "empty packed address"
+    if not packed.isascii() or not packed.isdigit():
+        return "packed address must be non-empty decimal digits"
+    n = int(packed, 10)
+    node_part = n // 100
+    s = str(node_part)
+    try:
+        int(s, 8)
+    except ValueError:
+        return f"node part {node_part} is not valid (only digits 0–7 allowed in the node number)"
+    return None
+
+
 def _publish_bridge_status(
     client: mqtt.Client,
     payload: str,
@@ -319,6 +342,13 @@ def main() -> int:
             _flat_parts = body.split(None, 1)
             packed = _flat_parts[0]
             state = _flat_parts[1]
+        addr_err = packed_mqtt_lcos_node_validation_error(packed)
+        if addr_err is not None:
+            print(
+                f"MQTT: skip serial/LCOS — topic {msg.topic!r} packed {packed!r}: {addr_err}",
+                file=sys.stderr,
+            )
+            return
         line = f"{CMD_TURNOUT_TOPIC}/{packed} {state}\n".encode("utf-8")
         if not isinstance(turnout_q, queue.Queue):
             if args.verbose:
