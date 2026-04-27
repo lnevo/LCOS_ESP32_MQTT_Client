@@ -5,6 +5,7 @@
 #include <string.h>
 #include "lcos_mqtt_bridge.h"
 #include "gateways.h"
+#include "mqtt_serial.h"
 
 /* Must match serial_to_mqtt.py CMD_TURNOUT_TOPIC + "/" and MQTT_TOPIC_CMD_TURNOUT in mqtt_serial.h */
 #define CMD_TURNOUT_PREFIX "track/cmd/turnout/"
@@ -42,7 +43,8 @@ static void handleTurnoutCmdFromSerialLine(lcos_layout *layout, const char *rest
   if (*end == '\0') {
     return;
   }
-  uint16_t node = (uint16_t)(packed_ul / 100u);
+  uint16_t jmriNode = (uint16_t)(packed_ul / 100u);
+  uint16_t lcosNode = mqttDisplayNodeToLcosNode(jmriNode);
   byte uid = (byte)(packed_ul % 100u);
   byte align;
   if (streq_ci(end, "CLOSED")) {
@@ -52,7 +54,7 @@ static void handleTurnoutCmdFromSerialLine(lcos_layout *layout, const char *rest
   } else {
     return;
   }
-  layout->sendShortMessage(false, node, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
+  layout->sendShortMessage(false, lcosNode, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
     uid, LCOS_CMD_SET_STATE_NO_LOCK, align, 0);
   layout->update();
 }
@@ -64,7 +66,7 @@ static void handleTurnoutCmdFromSerialLine(lcos_layout *layout, const char *rest
 static const uint16_t kSubscribeTargets[] = { 4, 3, 13 };
 
 // --- Serial text: heartbeat from Python (serial_to_mqtt.py) ---
-// sendShortMessage(..., dest, ..., uid, ...) uses RF24/LCOS node address as **decimal** (docs often show octal: 03=3, 010=8).
+// Turnout line "track/cmd/turnout/<packed> ..." uses jmriNode*100+uid; mqttDisplayNodeToLcosNode() before sendShortMessage.
 // Turnout index 0 => UID UID_OFFSET_TURNOUTS+0 (8). Replies on MQTT use pkt.source_node from the wire, not dest.
 #define HB_SERIAL_TOKEN "PING"
 #define HB_TURNOUT_NODE 3
