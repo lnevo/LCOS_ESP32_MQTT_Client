@@ -14,7 +14,9 @@
 struct DATAGRAM;  // forward decl; include lcos.h in .cpp
 
 // JMRI receive topic prefixes (append packed address via mqttTopicWithPackedAddress)
-// Packed address = node*100 + uid. LCOS UID ranges (from lcos.h):
+// Packed address = jmriNode*100 + uid, where jmriNode = octal string of the RF24 address read as
+// decimal (e.g. LCOS 012 = 10 → "12" → 12). See lcosNodeToMqttDisplayNode / mqttDisplayNodeToLcosNode.
+// LCOS UID ranges (from lcos.h):
 //   0–7   blocks, 8–15  turnouts, 16–31 routes, 32–47 signals, 48–49 crossings,
 //   50    mpos,   51–66 relays,  67–82 control objects (buttons etc.), 83+ scene objects.
 //   Turnout topic: uid = data0 (already full turnout UID 8–15).
@@ -36,16 +38,25 @@ struct DATAGRAM;  // forward decl; include lcos.h in .cpp
 void mqttPublish(Print &out, const char *topic, const char *payload);
 
 /**
- * Pack node + UID into one JMRI system number: node*100 + uid (e.g. node 4, uid 67 → 467).
- * Use for all MQTT topic suffixes so addresses are unique across nodes.
+ * Map LCOS/RF24 internal node to the JMRI packed “node” digit group (string of %o digits read in base 10).
  */
-uint16_t mqttPackedAddress(uint16_t node, byte uid);
+uint16_t lcosNodeToMqttDisplayNode(uint16_t lcosNode);
 
 /**
- * Build topic string from prefix + packed address: e.g. prefix "track/turnout/", node 4, uid 8 → "track/turnout/408".
- * Returns buf (so you can chain with mqttPublish). Use for turnouts, sensors, and all object types.
+ * Map JMRI packed “node” group back to LCOS/RF24 internal (decimal string parsed as base 8).
  */
-char *mqttTopicWithPackedAddress(char *buf, size_t bufSize, const char *prefix, uint16_t node, byte uid);
+uint16_t mqttDisplayNodeToLcosNode(uint16_t jmriNode);
+
+/**
+ * Pack LCOS source_node + uid into one JMRI system number: jmriNode*100 + uid, jmriNode = lcosNodeToMqttDisplayNode(LCOS).
+ */
+uint16_t mqttPackedAddress(uint16_t lcosNode, byte uid);
+
+/**
+ * Build topic from prefix; lcosNode is the RF24 address from the datagram. Example: internal 10, uid 8 → 1208.
+ * Returns buf (so you can chain with mqttPublish).
+ */
+char *mqttTopicWithPackedAddress(char *buf, size_t bufSize, const char *prefix, uint16_t lcosNode, byte uid);
 
 // --- JMRI payload conversion (exact strings per SERIAL OUTPUT PROTOCOL) ---
 

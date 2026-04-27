@@ -12,6 +12,7 @@
 #include "mqtt_serial.h"
 #include "lcos/lcos.h"
 #include <stdio.h>
+#include <stdlib.h>
 
 void mqttPublish(Print &out, const char *topic, const char *payload) {
   out.print(topic);
@@ -20,8 +21,21 @@ void mqttPublish(Print &out, const char *topic, const char *payload) {
   out.print('\n');  // LF only, no CR
 }
 
-uint16_t mqttPackedAddress(uint16_t node, byte uid) {
-  return (uint16_t)node * 100 + (uint16_t)uid;
+uint16_t lcosNodeToMqttDisplayNode(uint16_t lcosNode) {
+  char buf[8];
+  snprintf(buf, sizeof(buf), "%o", (unsigned)lcosNode);
+  return (uint16_t)strtoul(buf, nullptr, 10);
+}
+
+uint16_t mqttDisplayNodeToLcosNode(uint16_t jmriNode) {
+  char buf[8];
+  snprintf(buf, sizeof(buf), "%u", (unsigned)jmriNode);
+  return (uint16_t)strtoul(buf, nullptr, 8);
+}
+
+uint16_t mqttPackedAddress(uint16_t lcosNode, byte uid) {
+  uint16_t n = lcosNodeToMqttDisplayNode(lcosNode);
+  return n * 100u + (uint16_t)uid;
 }
 
 char *mqttTopicWithPackedAddress(char *buf, size_t bufSize, const char *prefix, uint16_t node, byte uid) {
@@ -79,6 +93,8 @@ static void debugOperationPayload(Print &out, byte event, uint16_t lcos_source_n
   out.print((int)event);
   out.print(F(" src="));
   out.print(lcos_source_node);
+  out.print(F(" jmriN="));
+  out.print(lcosNodeToMqttDisplayNode(lcos_source_node));
   out.print(F(" rf24="));
   out.print(rf24_from_node);
   out.print(F(" to="));
