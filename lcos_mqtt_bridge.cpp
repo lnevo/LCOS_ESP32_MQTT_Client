@@ -63,7 +63,8 @@ static void handleTurnoutCmdFromSerialLine(lcos_layout *layout, const char *rest
 #define SUBSCRIBE_EVENT_MASK (INCLUDE_BLOCK_EVENTS | INCLUDE_TURNOUT_EVENTS | INCLUDE_SIGNAL_EVENTS \
   | INCLUDE_BUTTON_EVENTS | INCLUDE_SWITCH_EVENTS | INCLUDE_TRACK_POWER_EVENTS | INCLUDE_SENSOR_EVENTS)
 
-static const uint16_t kSubscribeTargets[] = { 4, 3, 13 };
+/* JMRI display nodes (decimal digit string of RF24 octal addr). Mapped via mqttDisplayNodeToLcosNode. */
+static const uint16_t kSubscribeDisplayNodes[] = { 1, 2, 3, 4, 12, 13 };
 
 // --- Serial text: heartbeat from Python (serial_to_mqtt.py) ---
 // Turnout line "track/cmd/turnout/<packed> ..." uses jmriNode*100+uid; mqttDisplayNodeToLcosNode() before sendShortMessage.
@@ -131,8 +132,9 @@ void mqtt_bridge_setup_subscriptions(lcos_layout *layout, uint16_t sourceNode) {
   }
   LCMNetwork *net = layout->getNetworkObject();
   layout->update();
-  for (unsigned i = 0; i < sizeof(kSubscribeTargets) / sizeof(kSubscribeTargets[0]); i++) {
-    subscribeToNode(net, sourceNode, kSubscribeTargets[i], SUBSCRIBE_EVENT_MASK);
+  for (unsigned i = 0; i < sizeof(kSubscribeDisplayNodes) / sizeof(kSubscribeDisplayNodes[0]); i++) {
+    uint16_t lcosTarget = mqttDisplayNodeToLcosNode(kSubscribeDisplayNodes[i]);
+    subscribeToNode(net, sourceNode, lcosTarget, SUBSCRIBE_EVENT_MASK);
     layout->update();
   }
 }
