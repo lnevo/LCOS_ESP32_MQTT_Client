@@ -148,8 +148,11 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
       prefix = MQTT_TOPIC_TURNOUT;
       payload = turnoutStateToPayload(data1);
       break;
-    case EVENT_SIGNAL:
     case EVENT_SIGNAL_CMD:
+      /* Status (EVENT_SIGNAL) is authoritative; CMD frames often carry non-UID data0 (e.g. 0x7F)
+       * and were publishing bogus track/signalmast/559 etc. Mirror EVENT_TURNOUT_CMD. */
+      return;
+    case EVENT_SIGNAL:
       prefix = MQTT_TOPIC_SIGNALMAST;
       payload = signalMastStateToPayload(data1);
       /* lcos.h: UID_OFFSET_SIGNALS 32 (range 32–47). data0 = uid or index not defined in library; we use offset+data0. */

@@ -18,8 +18,15 @@ On MQTT connect we publish BRIDGE_STATUS_ONLINE to track/bridge/status (retained
 publish BRIDGE_STATUS_OFFLINE (best-effort before disconnect).
 
 Turnout commands: subscribe to track/cmd/turnout/# (JMRI: topic track/cmd/turnout/<packed>, payload
-THROWN or CLOSED). Optionally still accept flat topic track/cmd/turnout with payload "<packed> THROWN".
-Serial to the Nano is always "track/cmd/turnout/<packed> THROWN|CLOSED\\n" (same shape as JMRI topic + payload).
+THROWN, CLOSED, or TOGGLE). Optionally still accept flat topic track/cmd/turnout with payload
+"<packed> THROWN". Serial to the Nano is always
+"track/cmd/turnout/<packed> THROWN|CLOSED|TOGGLE\\n" (same shape as JMRI topic + payload).
+TOGGLE is LCOS ALIGN_TOGGLE (API data2=3); JMRI does not send it.
+
+SignalHead commands: subscribe to track/signalhead/# (Digicon/JMRI Virtual: topic
+track/signalhead/IH<packed>, payload Red|Yellow|Green|Dark|… or Release|Get). Forwarded as the
+same line shape to serial; Nano sets aspect then RELEASE (API data1=3) so command mode does not
+stick; Release/Get alone are also accepted. IH464 maps to the same LCOS object as signalmast/464.
 
 Usage:
   Windows:  run_serial_mqtt.cmd [-h|/?|...] [verbose] [debug] [heartbeat] [restore] [-- python-args...]
@@ -82,12 +89,22 @@ BRIDGE_STATUS_OFFLINE = "offline"
 
 # JMRI -> bridge -> serial -> LCOS (distinct from state topic track/turnout/<packed>).
 CMD_TURNOUT_TOPIC = "track/cmd/turnout"
-# Wildcard subscription: receive track/cmd/turnout/408, payload THROWN|CLOSED (JMRI-style).
+# Wildcard subscription: receive track/cmd/turnout/408, payload THROWN|CLOSED|TOGGLE.
 CMD_TURNOUT_SUBSCRIBE = "track/cmd/turnout/#"
 _TURNOUT_HIER_TOPIC_RE = re.compile(r"^track/cmd/turnout/(\d+)$")
-_TURNOUT_STATE_RE = re.compile(r"^(THROWN|CLOSED)\s*$", re.IGNORECASE)
+_TURNOUT_STATE_RE = re.compile(r"^(THROWN|CLOSED|TOGGLE)\s*$", re.IGNORECASE)
 # Legacy: single topic track/cmd/turnout, payload "408 THROWN".
-_TURNOUT_FLAT_PAYLOAD_RE = re.compile(r"^\d+\s+(THROWN|CLOSED)\s*$", re.IGNORECASE)
+_TURNOUT_FLAT_PAYLOAD_RE = re.compile(r"^\d+\s+(THROWN|CLOSED|TOGGLE)\s*$", re.IGNORECASE)
+
+# Digicon / JMRI Virtual heads → LCOS SIGNAL_CMD (status still on track/signalmast/<packed>).
+SIGNALHEAD_TOPIC_PREFIX = "track/signalhead/"
+SIGNALHEAD_SUBSCRIBE = "track/signalhead/#"
+_SIGNALHEAD_IH_TOPIC_RE = re.compile(r"^track/signalhead/(IH\d+)$", re.IGNORECASE)
+_SIGNALHEAD_APPEARANCE_RE = re.compile(
+    r"^(Red|Yellow|Green|Dark|Off|FlashRed|FlashYellow|FlashGreen|Lunar|FlashLunar|"
+    r"Stop|Approach|Clear|Release|Unheld|Get|Query)\s*$",
+    re.IGNORECASE,
+)
 
 
 def packed_mqtt_lcos_node_validation_error(packed: str) -> str | None:
@@ -184,6 +201,15 @@ def _handle_serial_text_line(
             print(stripped)
         return
 
+    # ACK … from Nano (command echo). Visible with --verbose; not an MQTT publish.
+    if stripped.startswith("ACK "):
+        if verbose:
+            print(stripped)
+        _publish_heartbeat_ack_if_present(
+            client, stripped, heartbeat_on=heartbeat_on, verbose=verbose
+        )
+        return
+
     parsed = parse_line(line)
     if parsed is not None:
         topic, payload = parsed
@@ -249,17 +275,19 @@ def main() -> int:
         "-r",
         "--restore",
         action="store_true",
-        help="Apply retained MQTT messages on subscribe (turnout cmds to serial; retained heartbeat PING if enabled)",
+        help="Apply retained MQTT messages on subscribe (turnout/signalhead cmds to serial; "
+        "retained heartbeat PING if enabled)",
     )
     args = ap.parse_args()
 
     heartbeat_on = bool(DEBUG_HEARTBEAT or args.debug_heartbeat)
 
     ping_cmd_queue: queue.Queue[object] = queue.Queue(maxsize=32)
-    turnout_cmd_queue: queue.Queue[bytes] = queue.Queue(maxsize=32)
+    # Shared serial outbound queue for turnout + signalhead command lines.
+    serial_cmd_queue: queue.Queue[bytes] = queue.Queue(maxsize=64)
 
     client = _make_mqtt_client()
-    client.user_data_set((ping_cmd_queue, turnout_cmd_queue))
+    client.user_data_set((ping_cmd_queue, serial_cmd_queue))
 
     def _subscribe_line(_client: mqtt.Client, topic: str, qos: int = 1) -> None:
         res = _client.subscribe(topic, qos=qos)
@@ -271,15 +299,31 @@ def main() -> int:
             st = "ok" if not getattr(rc, "is_failure", True) else "failed"
         print(f"Subscribe {topic!r}: {st}")
 
+    def _queue_serial_cmd(cmd_q: queue.Queue, line: bytes, *, label: str) -> None:
+        try:
+            cmd_q.put_nowait(line)
+            if args.verbose:
+                print(
+                    f"MQTT {label} queued for serial: "
+                    f"{line.decode('utf-8', errors='replace').rstrip()!r}"
+                )
+        except queue.Full:
+            if args.verbose:
+                print(
+                    f"MQTT {label}: serial queue full (drop); increase drain rate or queue size",
+                    file=sys.stderr,
+                )
+
     def on_connect(_client, _userdata, _flags, reason_code, _properties=None):
         if not _mqtt_connect_ok(reason_code):
             return
         if heartbeat_on:
             _subscribe_line(_client, HEARTBEAT_MQTT_TOPIC, qos=1)
         _subscribe_line(_client, CMD_TURNOUT_SUBSCRIBE, qos=1)
+        _subscribe_line(_client, SIGNALHEAD_SUBSCRIBE, qos=1)
 
     def on_message(_client, userdata, msg):
-        ping_q, turnout_q = userdata
+        ping_q, cmd_q = userdata
         if heartbeat_on and msg.topic == HEARTBEAT_MQTT_TOPIC:
             if not args.restore and bool(getattr(msg, "retain", False)):
                 return
@@ -296,6 +340,53 @@ def main() -> int:
             except queue.Full:
                 pass
             return
+
+        # --- signalhead IH* ---
+        signal_m = _SIGNALHEAD_IH_TOPIC_RE.match(msg.topic)
+        if signal_m is not None:
+            if not args.restore and bool(getattr(msg, "retain", False)):
+                return
+            if args.verbose:
+                qos = getattr(msg, "qos", "?")
+                ret = getattr(msg, "retain", "?")
+                print(
+                    f"MQTT RX signalhead topic={msg.topic!r} qos={qos} retain={ret} "
+                    f"raw_bytes={msg.payload!r}"
+                )
+            try:
+                body = msg.payload.decode("utf-8", errors="replace").strip()
+            except Exception as e:
+                if args.verbose:
+                    print(f"MQTT signalhead: UTF-8 decode failed: {e}", file=sys.stderr)
+                return
+            if not _SIGNALHEAD_APPEARANCE_RE.match(body):
+                if args.verbose:
+                    print(
+                        "MQTT signalhead rejected: expected Red/Yellow/Green/Dark "
+                        f"(or Flash*/Lunar/Stop/Approach/Clear/Release/Get); decoded={body!r}"
+                    )
+                return
+            ih_name = signal_m.group(1).upper()
+            packed = ih_name[2:]
+            addr_err = packed_mqtt_lcos_node_validation_error(packed)
+            if addr_err is not None:
+                print(
+                    f"MQTT: skip serial/LCOS — topic {msg.topic!r} packed {packed!r}: {addr_err}",
+                    file=sys.stderr,
+                )
+                return
+            line = f"{SIGNALHEAD_TOPIC_PREFIX}{ih_name} {body}\n".encode("utf-8")
+            _queue_serial_cmd(cmd_q, line, label="signalhead")
+            return
+        if msg.topic.startswith(SIGNALHEAD_TOPIC_PREFIX):
+            if args.verbose:
+                print(
+                    f"MQTT signalhead ignored (need IH + digits): {msg.topic!r}",
+                    file=sys.stderr,
+                )
+            return
+
+        # --- turnout ---
         hier = _TURNOUT_HIER_TOPIC_RE.match(msg.topic)
         is_flat = msg.topic == CMD_TURNOUT_TOPIC
         if hier is None and not is_flat:
@@ -327,7 +418,7 @@ def main() -> int:
                 if args.verbose:
                     print(
                         "MQTT turnout cmd rejected (hierarchical topic): expected payload "
-                        f"THROWN or CLOSED only; decoded={body!r}"
+                        f"THROWN, CLOSED, or TOGGLE; decoded={body!r}"
                     )
                 return
             state = body
@@ -335,8 +426,8 @@ def main() -> int:
             if not _turnout_flat_payload_ok(body):
                 if args.verbose:
                     print(
-                        "MQTT turnout cmd rejected (flat topic): expected '<packed> THROWN' or "
-                        f"'<packed> CLOSED', e.g. '408 THROWN': decoded={body!r}"
+                        "MQTT turnout cmd rejected (flat topic): expected '<packed> THROWN', "
+                        f"'<packed> CLOSED', or '<packed> TOGGLE', e.g. '408 THROWN': decoded={body!r}"
                     )
                 return
             _flat_parts = body.split(None, 1)
@@ -350,23 +441,7 @@ def main() -> int:
             )
             return
         line = f"{CMD_TURNOUT_TOPIC}/{packed} {state}\n".encode("utf-8")
-        if not isinstance(turnout_q, queue.Queue):
-            if args.verbose:
-                print("MQTT turnout cmd: internal error (bad queue)", file=sys.stderr)
-            return
-        try:
-            turnout_q.put_nowait(line)
-            if args.verbose:
-                print(
-                    "MQTT turnout cmd queued for serial: "
-                    f"{line.decode('utf-8', errors='replace').rstrip()!r}"
-                )
-        except queue.Full:
-            if args.verbose:
-                print(
-                    "MQTT turnout cmd: serial queue full (drop); increase drain rate or queue size",
-                    file=sys.stderr,
-                )
+        _queue_serial_cmd(cmd_q, line, label="turnout")
 
     client.on_connect = on_connect
     client.on_message = on_message
@@ -419,19 +494,61 @@ def main() -> int:
         return 1
 
     last_heartbeat = time.monotonic()
+    # Wait for Nano ACK before sending the next cmd (Digicon bursts were garbling USB RX).
+    _ACK_WAIT_SEC = 0.35
+
+    def _read_one_serial_line() -> str | None:
+        raw = ser.readline()
+        if not raw:
+            return None
+        try:
+            return raw.decode("utf-8", errors="replace")
+        except Exception:
+            return None
+
+    def _handle_and_is_ack(line: str) -> bool:
+        _handle_serial_text_line(
+            client,
+            line,
+            debug=args.debug,
+            verbose=args.verbose,
+            heartbeat_on=heartbeat_on,
+        )
+        return line.strip("\r\n").startswith("ACK ")
+
+    def _write_serial_cmd(line_out: bytes) -> None:
+        ser.write(line_out)
+        ser.flush()
+        if args.verbose:
+            print(f"MQTT -> serial {line_out!r}")
+        deadline = time.monotonic() + _ACK_WAIT_SEC
+        saw_ack = False
+        while time.monotonic() < deadline:
+            line = _read_one_serial_line()
+            if line is None:
+                continue
+            if _handle_and_is_ack(line):
+                saw_ack = True
+                # Drain a few immediate follow-up lines (DBG / early status) without blocking long.
+                drain_until = time.monotonic() + 0.05
+                while time.monotonic() < drain_until:
+                    more = _read_one_serial_line()
+                    if more is None:
+                        break
+                    _handle_and_is_ack(more)
+                break
+        if not saw_ack and args.verbose:
+            print("MQTT -> serial: no ACK within timeout", file=sys.stderr)
 
     try:
         while not stop:
             try:
                 while True:
                     try:
-                        line_out = turnout_cmd_queue.get_nowait()
+                        line_out = serial_cmd_queue.get_nowait()
                     except queue.Empty:
                         break
-                    ser.write(line_out)
-                    ser.flush()
-                    if args.verbose:
-                        print(f"MQTT -> serial {line_out!r}")
+                    _write_serial_cmd(line_out)
 
                 while True:
                     try:
@@ -451,20 +568,10 @@ def main() -> int:
                     if args.verbose:
                         print(f"HB -> serial {HEARTBEAT_SERIAL_LINE!r}")
 
-                raw = ser.readline()
-                if not raw:
+                line = _read_one_serial_line()
+                if line is None:
                     continue
-                try:
-                    line = raw.decode("utf-8", errors="replace")
-                except Exception:
-                    continue
-                _handle_serial_text_line(
-                    client,
-                    line,
-                    debug=args.debug,
-                    verbose=args.verbose,
-                    heartbeat_on=heartbeat_on,
-                )
+                _handle_and_is_ack(line)
             except serial.SerialException as e:
                 print(f"Serial error: {e}", file=sys.stderr)
                 time.sleep(0.5)

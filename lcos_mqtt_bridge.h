@@ -72,17 +72,20 @@ class gateway;
  * `data1` (after `data0` = UID). Alignment (`ALIGN_*`) or aspect (`SIGNAL_*`) goes in `data2`. Last
  * `sendShortMessage` argument = 0 for a new command (not a response).
  *
- * **Source:** Beagle Bay LCOS operating API — same numeric values as the “Command requests” table in
- * this repo’s README.md (*CTC Functions → LCOS API*). Stock `lcos.h` from the author does not define
- * these names; they are provided here only for this MQTT bridge sketch. You may use the hex literals
- * directly (0x01, 0x02, …) if you prefer not to depend on this header.
+ * Turnout (Public API + maintainer notes): 1=get, 2=set w/o lock, 3=set w/ lock, 0x7F=release.
+ * Signal (Public API Events-Operating row): 1=GET aspect, 2=set aspect, 3=RELEASE
+ * (signal RELEASE is 0x03, not turnout's 0x7F). Stock `lcos.h` does not define these names.
  */
 #define LCOS_CMD_GET_STATE            0x01
 #define LCOS_CMD_SET_STATE_NO_LOCK    0x02
 #define LCOS_CMD_SET_STATE_WITH_LOCK  0x03
 #define LCOS_CMD_RELEASE_LOCK         0x7F
+/* Signal-specific aliases (same numeric GET/SET; RELEASE differs from turnout). */
+#define LCOS_SIGNAL_CMD_GET           0x01
+#define LCOS_SIGNAL_CMD_SET           0x02
+#define LCOS_SIGNAL_CMD_RELEASE       0x03
 
-#define MQTT_BRIDGE_SYS_ID "LCOS MQTT bridge (JMRI) — subscriptions to nodes 4, 3, 13"
+#define MQTT_BRIDGE_SYS_ID "LCOS MQTT bridge (JMRI) — IH signalhead cmd + display-node subs"
 
 void mqtt_bridge_setup_subscriptions(lcos_layout *layout, uint16_t sourceNode);
 void mqtt_bridge_poll_serial(lcos_layout *layout, LCMNetwork *net, gateway *serial_gw);
