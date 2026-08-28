@@ -694,8 +694,10 @@ def main() -> int:
         return 1
 
     last_heartbeat = time.monotonic()
-    # Wait for Nano ACK before sending the next cmd (Digicon bursts were garbling USB RX).
+    # Turnout cmds: wait briefly for Nano ACK (USB RX was garbled without pacing).
+    # Signalhead cmds: no ACK expected — pace with a short gap only.
     _ACK_WAIT_SEC = 0.35
+    _SIGNALHEAD_GAP_SEC = SML_MODE_SERIAL_GAP_SEC
 
     def _read_one_serial_line() -> str | None:
         raw = ser.readline()
@@ -716,7 +718,29 @@ def main() -> int:
         )
         return line.strip("\r\n").startswith("ACK ")
 
+    def _drain_serial_nonblocking(max_sec: float = 0.02) -> None:
+        """Pull any pending Nano lines (status/ACK) without waiting for a specific ACK."""
+        deadline = time.monotonic() + max_sec
+        while time.monotonic() < deadline:
+            line = _read_one_serial_line()
+            if line is None:
+                break
+            _handle_and_is_ack(line)
+
+    def _write_serial_signalhead(line_out: bytes, *, gap_sec: float | None = None) -> None:
+        """Signalhead SET/RELEASE — no ACK wait; short gap for USB/Nano pacing."""
+        ser.write(line_out)
+        ser.flush()
+        if args.verbose:
+            print(f"MQTT -> serial {line_out!r}")
+        _drain_serial_nonblocking(0.02)
+        time.sleep(_SIGNALHEAD_GAP_SEC if gap_sec is None else gap_sec)
+
     def _write_serial_cmd(line_out: bytes) -> None:
+        # Digicon / JMRI signalhead: firmware does not ACK these the way turnout cmds do.
+        if line_out.startswith(SIGNALHEAD_TOPIC_PREFIX.encode("ascii")):
+            _write_serial_signalhead(line_out)
+            return
         ser.write(line_out)
         ser.flush()
         if args.verbose:
@@ -729,7 +753,6 @@ def main() -> int:
                 continue
             if _handle_and_is_ack(line):
                 saw_ack = True
-                # Drain a few immediate follow-up lines (DBG / early status) without blocking long.
                 drain_until = time.monotonic() + 0.05
                 while time.monotonic() < drain_until:
                     more = _read_one_serial_line()
@@ -740,40 +763,24 @@ def main() -> int:
         if not saw_ack and args.verbose:
             print("MQTT -> serial: no ACK within timeout", file=sys.stderr)
 
-    def _write_serial_burst_line(line_out: bytes, *, gap_sec: float) -> None:
-        """Write one line for Digicon bulk Red/Unheld — short pace, light ACK wait."""
-        ser.write(line_out)
-        ser.flush()
-        if args.verbose:
-            print(f"MQTT -> serial (burst) {line_out!r}")
-        # Brief window for ACK / status; do not burn 0.35s per head.
-        deadline = time.monotonic() + min(0.12, max(0.02, gap_sec * 2))
-        while time.monotonic() < deadline:
-            line = _read_one_serial_line()
-            if line is None:
-                continue
-            _handle_and_is_ack(line)
-        time.sleep(gap_sec)
-
     def _run_sml_guard_release() -> None:
         """All Red → one 3s hold → all Unheld → retain sml_mode disabled."""
         gap = SML_MODE_SERIAL_GAP_SEC
         hold = SML_MODE_RED_HOLD_SEC
         print(
             f"sml_mode: serial Red-all ({len(DIGICON_PACKED_HEADS)}), "
-            f"hold {hold}s, then Unheld-all (gap={gap}s)"
+            f"hold {hold}s, then Unheld-all (gap={gap}s, no ACK wait)"
         )
         for packed in DIGICON_PACKED_HEADS:
             err = packed_mqtt_lcos_node_validation_error(packed)
             if err is not None:
                 print(f"sml_mode burst skip {packed}: {err}", file=sys.stderr)
                 continue
-            _write_serial_burst_line(
+            _write_serial_signalhead(
                 f"{SIGNALHEAD_TOPIC_PREFIX}{packed} Red\n".encode("utf-8"),
                 gap_sec=gap,
             )
         print(f"sml_mode: holding Red {hold}s before Unheld")
-        # Keep draining serial during the hold so status lines do not backlog.
         hold_deadline = time.monotonic() + hold
         while time.monotonic() < hold_deadline:
             line = _read_one_serial_line()
@@ -785,7 +792,7 @@ def main() -> int:
             err = packed_mqtt_lcos_node_validation_error(packed)
             if err is not None:
                 continue
-            _write_serial_burst_line(
+            _write_serial_signalhead(
                 f"{SIGNALHEAD_TOPIC_PREFIX}{packed} Unheld\n".encode("utf-8"),
                 gap_sec=gap,
             )
