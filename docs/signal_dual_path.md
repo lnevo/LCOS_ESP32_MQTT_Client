@@ -35,9 +35,10 @@ Retained **`track/bridge/sml_mode`**: `enabled` | `disabled` | `query`.
 
 | Event | Bridge action |
 |-------|----------------|
-| Bridge start, or live `track/state` **OFFLINE** | Publish retained `query`; wait ~5s |
+| Bridge start / live `track/state` **OFFLINE** | Read last `sml_mode`. **Only if `enabled`**, publish `query` and wait ~5s |
 | Digicon JMRI (SML Enabled) replies `enabled` | Cancel — leave field alone |
-| No ACK | Serial: **all** Digicon heads **Red** (paced ~50ms), **one** 3s hold, **all** **Unheld**, retain `disabled` |
+| No ACK (was enabled, controller gone) | Serial: **all** Digicon heads **Red** (paced ~50ms), **one** 3s hold, **all** **Unheld**, retain `disabled` |
+| `sml_mode` already `disabled` / missing | **Skip** — no Red/Unheld storm |
 
 JMRI Digicon script owns Enable→Disable `Unheld` and per-mast SML-off `Unheld`. Boot into Disabled does **not** RELEASE.
 

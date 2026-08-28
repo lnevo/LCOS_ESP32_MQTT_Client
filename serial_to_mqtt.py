@@ -17,10 +17,12 @@ lines, not from the heartbeat path.
 On MQTT connect we publish BRIDGE_STATUS_ONLINE to track/bridge/status (retained). On clean exit we
 publish BRIDGE_STATUS_OFFLINE (best-effort before disconnect).
 
-Digicon SML guard (track/bridge/sml_mode): on bridge start and on track/state OFFLINE we publish
-retained "query". A Digicon JMRI with SML Enabled replies "enabled". If no reply within
-SML_MODE_QUERY_TIMEOUT_SEC, the serial thread SETs **all** Digicon heads Red (paced), waits
-**one** SML_MODE_RED_HOLD_SEC, then Unheld (RELEASE) all, and retains "disabled".
+Digicon SML guard (track/bridge/sml_mode): on bridge start (and JMRI track/state
+OFFLINE), only if retained/last sml_mode is **enabled**, publish "query". A live Digicon
+with SML Enabled replies "enabled". If no reply within SML_MODE_QUERY_TIMEOUT_SEC, the
+serial thread SETs all Digicon heads Red (paced), waits one SML_MODE_RED_HOLD_SEC, then
+Unheld (RELEASE) all, and retains "disabled". If sml_mode is already disabled/missing,
+skip — no radio storm.
 
 Turnout commands: subscribe to track/cmd/turnout/# (JMRI: topic track/cmd/turnout/<packed>, payload
 THROWN, CLOSED, TOGGLE, or ON/OFF for relay UIDs). Optionally still accept flat topic
@@ -209,7 +211,7 @@ def _publish_bridge_status(
 
 
 class DigiconSmlGuard:
-    """Challenge Digicon JMRI via sml_mode=query; RELEASE all heads if no enabled ACK."""
+    """Challenge Digicon JMRI via sml_mode=query; RELEASE only if mode was enabled."""
 
     def __init__(
         self,
@@ -232,6 +234,20 @@ class DigiconSmlGuard:
         self._got_enabled = False
         self._timer: threading.Timer | None = None
         self._generation = 0
+        # Last steady sml_mode from retain/live (enabled|disabled); ignore query.
+        self._last_mode: str | None = None
+
+    def maybe_start_challenge(self, reason: str) -> None:
+        """Query+RELEASE only when Digicon was left in enabled (stuck SET risk)."""
+        with self._lock:
+            mode = self._last_mode
+        if mode != "enabled":
+            print(
+                f"sml_mode: skip challenge ({reason}); "
+                f"last_mode={mode!r} (only challenge when enabled)"
+            )
+            return
+        self.start_challenge(reason)
 
     def start_challenge(self, reason: str) -> None:
         with self._lock:
@@ -261,6 +277,8 @@ class DigiconSmlGuard:
     def on_sml_mode_message(self, payload: str) -> None:
         mode = payload.strip().lower()
         with self._lock:
+            if mode in ("enabled", "disabled"):
+                self._last_mode = mode
             if not self._waiting:
                 return
             if mode == "enabled":
@@ -284,7 +302,7 @@ class DigiconSmlGuard:
             self._waiting = False
             self._timer = None
         print(
-            f"sml_mode: no enabled ACK within {self._query_timeout_sec}s — "
+            f"sml_mode: enabled but no live ACK within {self._query_timeout_sec}s — "
             f"queue Red-all / {self._red_hold_sec}s / Unheld-all "
             f"({len(self._packed)} Digicon heads)"
         )
@@ -489,8 +507,10 @@ def main() -> int:
             )
         guard = userdata[2] if isinstance(userdata, tuple) and len(userdata) > 2 else None
         if isinstance(guard, DigiconSmlGuard):
-            # Defer slightly so subscriptions are active before query.
-            threading.Timer(0.5, guard.start_challenge, args=("bridge-start",)).start()
+            # Wait for retained sml_mode, then challenge only if it was enabled.
+            threading.Timer(
+                1.0, guard.maybe_start_challenge, args=("bridge-start",)
+            ).start()
 
     def on_message(_client, userdata, msg):
         ping_q, cmd_q, guard = userdata
@@ -531,8 +551,8 @@ def main() -> int:
                 return
             if body == "OFFLINE" and isinstance(guard, DigiconSmlGuard):
                 if args.verbose:
-                    print("MQTT track/state OFFLINE -> sml_mode query")
-                guard.start_challenge("jmri-offline")
+                    print("MQTT track/state OFFLINE -> maybe sml_mode challenge")
+                guard.maybe_start_challenge("jmri-offline")
             return
 
         # --- signalhead/<packed> (optional legacy IH prefix) ---
