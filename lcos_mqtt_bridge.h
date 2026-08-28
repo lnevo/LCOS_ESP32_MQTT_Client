@@ -84,8 +84,21 @@ class gateway;
 #define LCOS_SIGNAL_CMD_GET           0x01
 #define LCOS_SIGNAL_CMD_SET           0x02
 #define LCOS_SIGNAL_CMD_RELEASE       0x03
+/*
+ * Custom / relay objects (EVENT_CONTROL_CMD 0x14). Public API: data1 1=Set Auto, 3=do option,
+ * 0x7F=RELEASE; data2 = option. We treat option 0=OFF, 1=ON for Relay Obj lamps.
+ */
+#define LCOS_CONTROL_CMD_DO_OPTION    0x03
+#define LCOS_RELAY_OPTION_OFF         0
+#define LCOS_RELAY_OPTION_ON          1
 
-#define MQTT_BRIDGE_SYS_ID "LCOS MQTT bridge (JMRI) — IH signalhead cmd + display-node subs"
+/* After IH SIGNAL_CMD set, also emit track/signalmast/<packed> aspect report (JMRI receive path).
+ * 1 = default on; set 0 to rely only on field EVENT_SIGNAL status frames. */
+#ifndef MQTT_PUBLISH_SIGNALMAST_ON_SET
+#define MQTT_PUBLISH_SIGNALMAST_ON_SET 0
+#endif
+
+#define MQTT_BRIDGE_SYS_ID "LCOS MQTT bridge (JMRI) — IH set + signalmast status"
 
 void mqtt_bridge_setup_subscriptions(lcos_layout *layout, uint16_t sourceNode);
 void mqtt_bridge_poll_serial(lcos_layout *layout, LCMNetwork *net, gateway *serial_gw);

@@ -46,6 +46,45 @@ static void handleTurnoutCmdFromSerialLine(lcos_layout *layout, const char *rest
   uint16_t jmriNode = (uint16_t)(packed_ul / 100u);
   uint16_t lcosNode = mqttDisplayNodeToLcosNode(jmriNode);
   byte uid = (byte)(packed_ul % 100u);
+
+  /* Relay Obj band (51–66): JMRI MQTT turnout → EVENT_CONTROL_CMD (not TURNOUT_CMD).
+   * Packing matches working turnouts: packed=displayNode*100+UID, displayNode digits→octal RF24.
+   * e.g. 452 → jmriN=4 → lcos=04, UID=52 (Relay Obj 1). Field ACKs use cr=UID.
+   * data1/data2: use same "set" request byte as turnouts (0x02) with data2=0/1 off/on.
+   * (Public API custom-object row also lists 3=do option — Robin may clarify.) */
+  if (uid >= (byte)UID_OFFSET_RELAYS && uid < (byte)UID_OFFSET_CONTROL_OBJECTS) {
+    byte option;
+    if (streq_ci(end, "THROWN") || streq_ci(end, "ON")) {
+      option = (byte)LCOS_RELAY_OPTION_ON;
+    } else if (streq_ci(end, "CLOSED") || streq_ci(end, "OFF")) {
+      option = (byte)LCOS_RELAY_OPTION_OFF;
+    } else {
+      return;
+    }
+    Serial.print(F("DBG RELAY packed="));
+    Serial.print((unsigned)packed_ul);
+    Serial.print(F(" jmriN="));
+    Serial.print(jmriNode);
+    Serial.print(F(" lcosN="));
+    Serial.print(lcosNode);
+    Serial.print(F(" oct="));
+    Serial.print(lcosNode, OCT);
+    Serial.print(F(" uid="));
+    Serial.print((int)uid);
+    Serial.print(F(" set="));
+    Serial.print((int)LCOS_CMD_SET_STATE_NO_LOCK);
+    Serial.print(F(" d2="));
+    Serial.println((int)option);
+    layout->sendShortMessage(false, lcosNode, ETYPE_OPERATING, EVENT_CONTROL_CMD,
+      uid, LCOS_CMD_SET_STATE_NO_LOCK, option, 0);
+    layout->update();
+    /* Echo turnout state for MONITORING MQTT turnouts (field may not publish relay status). */
+    char topic[32];
+    mqttTopicWithPackedAddress(topic, sizeof(topic), MQTT_TOPIC_TURNOUT, lcosNode, uid);
+    mqttPublish(Serial, topic, option == LCOS_RELAY_OPTION_ON ? "THROWN" : "CLOSED");
+    return;
+  }
+
   byte align;
   if (streq_ci(end, "CLOSED")) {
     align = (byte)ALIGN_CLOSED;
@@ -61,11 +100,9 @@ static void handleTurnoutCmdFromSerialLine(lcos_layout *layout, const char *rest
   layout->update();
 }
 
-/* JMRI Virtual head: track/signalhead/IH<packed> Red|Yellow|Green|Dark|… */
+/* JMRI Virtual head: track/signalhead/<packed> Red|Yellow|Green|… (optional legacy IH prefix). */
 #define SIGNALHEAD_PREFIX "track/signalhead/"
 #define SIGNALHEAD_PREFIX_LEN (sizeof(SIGNALHEAD_PREFIX) - 1)
-#define SIGNALHEAD_IH_TOKEN "IH"
-#define SIGNALHEAD_IH_TOKEN_LEN 2
 
 /**
  * Map appearance name → LCOS SIGNAL_* for EVENT_SIGNAL_CMD data2.
@@ -96,11 +133,12 @@ static bool appearanceToLcosAspect(const char *name, byte *aspect_out) {
 }
 
 /**
- * Status remapping publishes topic_uid = OFFSET + wire_uid (Signal 0 → MQTT …64 / IH464).
- * Digicon Virtual heads already use API UIDs 32–47 (IH433 → 33). Only reverse the remapped band 64–79.
+ * Wire UID for SIGNAL_CMD: data0 is the Public API signal UID (32–47).
+ * Legacy remapped topics (…64–79 / IH464) still reverse to 32–47 for rollback testing.
  */
 static byte mqttSignalUidToWireData0(byte mqtt_uid) {
-  if (mqtt_uid >= (byte)(UID_OFFSET_SIGNALS * 2)) {
+  if (mqtt_uid >= (byte)(UID_OFFSET_SIGNALS * 2)
+      && mqtt_uid < (byte)(UID_OFFSET_SIGNALS * 2 + 16)) {
     return (byte)(mqtt_uid - (byte)UID_OFFSET_SIGNALS);
   }
   return mqtt_uid;
@@ -117,10 +155,11 @@ static void handleSignalHeadCmdFromSerialLine(lcos_layout *layout, const char *r
   if (layout == NULL || rest == NULL) {
     return;
   }
-  if (strncmp(rest, SIGNALHEAD_IH_TOKEN, SIGNALHEAD_IH_TOKEN_LEN) != 0) {
-    return;
+  /* Topic suffix is packed digits; accept optional legacy "IH" prefix. */
+  const char *num = rest;
+  if ((num[0] == 'I' || num[0] == 'i') && (num[1] == 'H' || num[1] == 'h')) {
+    num += 2;
   }
-  const char *num = rest + SIGNALHEAD_IH_TOKEN_LEN;
   char *end = NULL;
   unsigned long packed_ul = strtoul(num, &end, 10);
   if (end == num) {
@@ -151,9 +190,16 @@ static void handleSignalHeadCmdFromSerialLine(lcos_layout *layout, const char *r
   if (!appearanceToLcosAspect(end, &aspect)) {
     return;
   }
-  /* Set aspect, then RELEASE so field auto logic is not left in command mode. */
+  /* Set aspect only (no auto-RELEASE). */
   sendSignalCmd(layout, lcosNode, wire_uid, LCOS_SIGNAL_CMD_SET, aspect);
-  sendSignalCmd(layout, lcosNode, wire_uid, LCOS_SIGNAL_CMD_RELEASE, 0);
+#if MQTT_PUBLISH_SIGNALMAST_ON_SET
+  /* Optional optimistic mast echo (off while field EVENT_SIGNAL is SoR). */
+  {
+    char topic[32];
+    mqttTopicWithPackedAddress(topic, sizeof(topic), MQTT_TOPIC_SIGNALMAST, lcosNode, wire_uid);
+    mqttPublish(Serial, topic, signalMastStateToPayload(aspect));
+  }
+#endif
 }
 
 /* Event 125 subscription mask — INCLUDE_* bits from lcos.h */
