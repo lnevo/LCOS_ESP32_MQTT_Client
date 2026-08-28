@@ -31,13 +31,14 @@ Do **not** add `UID_OFFSET_SIGNALS` again on status publish (that produced MQTT 
 
 ## Digicon SML mode guard (`serial_to_mqtt.py`)
 
-Retained **`track/bridge/sml_mode`**: `enabled` | `disabled` | `query`.
+Retained **`track/bridge/sml_mode`**: `enabled` | `disabling` | `disabled` | `query`.
 
 | Event | Bridge action |
 |-------|----------------|
 | Bridge start / live `track/state` **OFFLINE** | Read last `sml_mode`. **Only if `enabled`**, publish `query` and wait ~5s |
 | Digicon JMRI (SML Enabled) replies `enabled` | Cancel — leave field alone |
-| No ACK (was enabled, controller gone) | Serial: **all** Digicon heads **Red** (paced ~50ms), **one** 3s hold, **all** **Unheld**, retain `disabled` |
+| No ACK (was enabled, controller gone) | Retain **`disabling`**, wait ~3s (late Digicon `enabled` aborts); else Red-all → hold → Unheld-all → retain `disabled` |
+| Digicon sees `disabling` while Enabled | Replies `enabled` so bridge suspends RELEASE |
 | `sml_mode` already `disabled` / missing | **Skip** — no Red/Unheld storm |
 
 JMRI Digicon script owns Enable→Disable `Unheld` and per-mast SML-off `Unheld`. Boot into Disabled does **not** RELEASE.

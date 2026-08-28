@@ -19,10 +19,10 @@ publish BRIDGE_STATUS_OFFLINE (best-effort before disconnect).
 
 Digicon SML guard (track/bridge/sml_mode): on bridge start (and JMRI track/state
 OFFLINE), only if retained/last sml_mode is **enabled**, publish "query". A live Digicon
-with SML Enabled replies "enabled". If no reply within SML_MODE_QUERY_TIMEOUT_SEC, the
-serial thread SETs all Digicon heads Red (paced), waits one SML_MODE_RED_HOLD_SEC, then
-Unheld (RELEASE) all, and retains "disabled". If sml_mode is already disabled/missing,
-skip — no radio storm.
+with SML Enabled replies "enabled". If no reply within SML_MODE_QUERY_TIMEOUT_SEC, publish
+retained **"disabling"** immediately, wait SML_MODE_DISABLING_WAIT_SEC (live Digicon may
+still ACK "enabled" and abort), then Red-all → one hold → Unheld-all → retain "disabled".
+If sml_mode is already disabled/missing, skip — no radio storm.
 
 Turnout commands: subscribe to track/cmd/turnout/# (JMRI: topic track/cmd/turnout/<packed>, payload
 THROWN, CLOSED, TOGGLE, or ON/OFF for relay UIDs). Optionally still accept flat topic
@@ -159,10 +159,12 @@ DIGICON_PACKED_HEADS = (
 SML_MODE_TOPIC = "track/bridge/sml_mode"
 JMRI_STATE_TOPIC = "track/state"
 SML_MODE_QUERY_TIMEOUT_SEC = 5.0
+# After query timeout: announce disabling, wait for a late Digicon enabled ACK, then RELEASE.
+SML_MODE_DISABLING_WAIT_SEC = 3.0
 SML_MODE_RED_HOLD_SEC = 3.0
 # Pace Digicon bulk Red/Unheld on USB serial (seconds between lines).
 SML_MODE_SERIAL_GAP_SEC = 0.05
-# Sentinel queued for main loop: Red-all → hold → Unheld-all (one 3s wait).
+# Sentinel queued for main loop: disabling announce → optional abort → Red/hold/Unheld.
 SML_GUARD_RELEASE = object()
 
 
@@ -221,6 +223,7 @@ class DigiconSmlGuard:
         verbose: bool,
         packed_heads: tuple[str, ...] = DIGICON_PACKED_HEADS,
         query_timeout_sec: float = SML_MODE_QUERY_TIMEOUT_SEC,
+        disabling_wait_sec: float = SML_MODE_DISABLING_WAIT_SEC,
         red_hold_sec: float = SML_MODE_RED_HOLD_SEC,
     ) -> None:
         self._client = client
@@ -228,13 +231,16 @@ class DigiconSmlGuard:
         self._verbose = verbose
         self._packed = packed_heads
         self._query_timeout_sec = query_timeout_sec
+        self._disabling_wait_sec = disabling_wait_sec
         self._red_hold_sec = red_hold_sec
         self._lock = threading.Lock()
         self._waiting = False
         self._got_enabled = False
+        self._releasing = False
+        self._abort_release = False
         self._timer: threading.Timer | None = None
         self._generation = 0
-        # Last steady sml_mode from retain/live (enabled|disabled); ignore query.
+        # Last steady sml_mode from retain/live (enabled|disabled); ignore query/disabling.
         self._last_mode: str | None = None
 
     def maybe_start_challenge(self, reason: str) -> None:
@@ -255,6 +261,8 @@ class DigiconSmlGuard:
             gen = self._generation
             self._waiting = True
             self._got_enabled = False
+            self._releasing = False
+            self._abort_release = False
             if self._timer is not None:
                 self._timer.cancel()
                 self._timer = None
@@ -279,6 +287,10 @@ class DigiconSmlGuard:
         with self._lock:
             if mode in ("enabled", "disabled"):
                 self._last_mode = mode
+            if mode == "enabled" and self._releasing:
+                self._abort_release = True
+                if self._verbose:
+                    print("sml_mode: enabled during disabling — abort RELEASE")
             if not self._waiting:
                 return
             if mode == "enabled":
@@ -288,9 +300,66 @@ class DigiconSmlGuard:
                     self._timer.cancel()
                     self._timer = None
                 if self._verbose:
-                    print(f"sml_mode: ACK enabled — cancel RELEASE")
+                    print("sml_mode: ACK enabled — cancel RELEASE")
                 return
-            # query/disabled while waiting: ignore (our query echo or stale)
+            # query/disabled/disabling while waiting: ignore (our echo or stale)
+
+    def should_abort_release(self) -> bool:
+        with self._lock:
+            return self._abort_release
+
+    def begin_disabling(self) -> bool:
+        """Publish retained disabling and wait for a late Digicon enabled ACK.
+
+        Returns True if RELEASE should proceed; False if Digicon is still alive.
+        """
+        with self._lock:
+            self._releasing = True
+            self._abort_release = False
+        try:
+            info = self._client.publish(SML_MODE_TOPIC, "disabling", qos=1, retain=True)
+            if hasattr(info, "wait_for_publish"):
+                info.wait_for_publish(timeout=3.0)
+            print(
+                f"sml_mode: TX disabling — wait {self._disabling_wait_sec}s "
+                "for Digicon enabled ACK before Red/Unheld"
+            )
+        except Exception as e:
+            print(f"sml_mode disabling publish failed: {e}", file=sys.stderr)
+            # Still wait briefly so a concurrent enabled can abort.
+        deadline = time.monotonic() + self._disabling_wait_sec
+        while time.monotonic() < deadline:
+            if self.should_abort_release():
+                with self._lock:
+                    self._releasing = False
+                print("sml_mode: Digicon still enabled — suspend RELEASE")
+                return False
+            time.sleep(0.05)
+        if self.should_abort_release():
+            with self._lock:
+                self._releasing = False
+            print("sml_mode: Digicon still enabled — suspend RELEASE")
+            return False
+        return True
+
+    def finish_disabled(self) -> None:
+        """Retain disabled after a completed RELEASE burst."""
+        with self._lock:
+            self._releasing = False
+            self._last_mode = "disabled"
+        try:
+            info = self._client.publish(SML_MODE_TOPIC, "disabled", qos=1, retain=True)
+            if hasattr(info, "wait_for_publish"):
+                info.wait_for_publish(timeout=3.0)
+            print(f"TX -> {SML_MODE_TOPIC} disabled")
+        except Exception as e:
+            print(f"sml_mode disabled publish failed: {e}", file=sys.stderr)
+
+    def cancel_release(self) -> None:
+        """Digicon reclaimed control mid-burst; leave mode as Digicon published."""
+        with self._lock:
+            self._releasing = False
+            self._abort_release = False
 
     def _on_timeout(self, generation: int) -> None:
         with self._lock:
@@ -303,7 +372,7 @@ class DigiconSmlGuard:
             self._timer = None
         print(
             f"sml_mode: enabled but no live ACK within {self._query_timeout_sec}s — "
-            f"queue Red-all / {self._red_hold_sec}s / Unheld-all "
+            f"queue disabling / Red-all / Unheld "
             f"({len(self._packed)} Digicon heads)"
         )
         try:
@@ -314,6 +383,7 @@ class DigiconSmlGuard:
     def stop(self) -> None:
         with self._lock:
             self._waiting = False
+            self._releasing = False
             if self._timer is not None:
                 self._timer.cancel()
                 self._timer = None
@@ -784,7 +854,9 @@ def main() -> int:
             print("MQTT -> serial: no ACK within timeout", file=sys.stderr)
 
     def _run_sml_guard_release() -> None:
-        """All Red → one 3s hold → all Unheld → retain sml_mode disabled."""
+        """Announce disabling → wait → (unless Digicon ACKs) Red → hold → Unheld → disabled."""
+        if not sml_guard.begin_disabling():
+            return
         gap = SML_MODE_SERIAL_GAP_SEC
         hold = SML_MODE_RED_HOLD_SEC
         print(
@@ -792,6 +864,10 @@ def main() -> int:
             f"hold {hold}s, then Unheld-all (gap={gap}s, no ACK wait)"
         )
         for packed in DIGICON_PACKED_HEADS:
+            if sml_guard.should_abort_release():
+                print("sml_mode: Digicon enabled mid-burst — abort RELEASE")
+                sml_guard.cancel_release()
+                return
             err = packed_mqtt_lcos_node_validation_error(packed)
             if err is not None:
                 print(f"sml_mode burst skip {packed}: {err}", file=sys.stderr)
@@ -803,12 +879,20 @@ def main() -> int:
         print(f"sml_mode: holding Red {hold}s before Unheld")
         hold_deadline = time.monotonic() + hold
         while time.monotonic() < hold_deadline:
+            if sml_guard.should_abort_release():
+                print("sml_mode: Digicon enabled during Red hold — abort Unheld")
+                sml_guard.cancel_release()
+                return
             line = _read_one_serial_line()
             if line is not None:
                 _handle_and_is_ack(line)
             else:
                 time.sleep(0.02)
         for packed in DIGICON_PACKED_HEADS:
+            if sml_guard.should_abort_release():
+                print("sml_mode: Digicon enabled before Unheld — abort")
+                sml_guard.cancel_release()
+                return
             err = packed_mqtt_lcos_node_validation_error(packed)
             if err is not None:
                 continue
@@ -816,14 +900,7 @@ def main() -> int:
                 f"{SIGNALHEAD_TOPIC_PREFIX}{packed} Unheld\n".encode("utf-8"),
                 gap_sec=gap,
             )
-        try:
-            info = client.publish(SML_MODE_TOPIC, "disabled", qos=1, retain=True)
-            if hasattr(info, "wait_for_publish"):
-                info.wait_for_publish(timeout=3.0)
-            if args.verbose:
-                print(f"TX -> {SML_MODE_TOPIC} disabled")
-        except Exception as e:
-            print(f"sml_mode disabled publish failed: {e}", file=sys.stderr)
+        sml_guard.finish_disabled()
 
     try:
         while not stop:
