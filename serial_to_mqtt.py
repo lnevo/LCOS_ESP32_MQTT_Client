@@ -19,8 +19,8 @@ publish BRIDGE_STATUS_OFFLINE (best-effort before disconnect).
 
 Digicon SML guard (track/bridge/sml_mode): on bridge start and on track/state OFFLINE we publish
 retained "query". A Digicon JMRI with SML Enabled replies "enabled". If no reply within
-SML_MODE_QUERY_TIMEOUT_SEC, we SET all Digicon heads Red, wait 3s, then Unheld (RELEASE), and
-retain "disabled".
+SML_MODE_QUERY_TIMEOUT_SEC, the serial thread SETs **all** Digicon heads Red (paced), waits
+**one** SML_MODE_RED_HOLD_SEC, then Unheld (RELEASE) all, and retains "disabled".
 
 Turnout commands: subscribe to track/cmd/turnout/# (JMRI: topic track/cmd/turnout/<packed>, payload
 THROWN, CLOSED, TOGGLE, or ON/OFF for relay UIDs). Optionally still accept flat topic
@@ -158,6 +158,10 @@ SML_MODE_TOPIC = "track/bridge/sml_mode"
 JMRI_STATE_TOPIC = "track/state"
 SML_MODE_QUERY_TIMEOUT_SEC = 5.0
 SML_MODE_RED_HOLD_SEC = 3.0
+# Pace Digicon bulk Red/Unheld on USB serial (seconds between lines).
+SML_MODE_SERIAL_GAP_SEC = 0.05
+# Sentinel queued for main loop: Red-all → hold → Unheld-all (one 3s wait).
+SML_GUARD_RELEASE = object()
 
 
 def packed_mqtt_lcos_node_validation_error(packed: str) -> str | None:
@@ -281,33 +285,13 @@ class DigiconSmlGuard:
             self._timer = None
         print(
             f"sml_mode: no enabled ACK within {self._query_timeout_sec}s — "
-            f"Red then Unheld for {len(self._packed)} Digicon heads"
+            f"queue Red-all / {self._red_hold_sec}s / Unheld-all "
+            f"({len(self._packed)} Digicon heads)"
         )
-        self._fanout_appearance("Red")
-        time.sleep(self._red_hold_sec)
-        self._fanout_appearance("Unheld")
         try:
-            info = self._client.publish(SML_MODE_TOPIC, "disabled", qos=1, retain=True)
-            if hasattr(info, "wait_for_publish"):
-                info.wait_for_publish(timeout=3.0)
-            if self._verbose:
-                print(f"TX -> {SML_MODE_TOPIC} disabled")
-        except Exception as e:
-            print(f"sml_mode disabled publish failed: {e}", file=sys.stderr)
-
-    def _fanout_appearance(self, appearance: str) -> None:
-        for packed in self._packed:
-            err = packed_mqtt_lcos_node_validation_error(packed)
-            if err is not None:
-                print(f"sml_mode fan-out skip {packed}: {err}", file=sys.stderr)
-                continue
-            line = f"{SIGNALHEAD_TOPIC_PREFIX}{packed} {appearance}\n".encode("utf-8")
-            try:
-                self._cmd_q.put_nowait(line)
-                if self._verbose:
-                    print(f"sml_mode queue serial: {line!r}")
-            except queue.Full:
-                print(f"sml_mode: serial queue full dropping {packed} {appearance}", file=sys.stderr)
+            self._cmd_q.put_nowait(SML_GUARD_RELEASE)
+        except queue.Full:
+            print("sml_mode: serial queue full; cannot schedule RELEASE", file=sys.stderr)
 
     def stop(self) -> None:
         with self._lock:
@@ -756,6 +740,64 @@ def main() -> int:
         if not saw_ack and args.verbose:
             print("MQTT -> serial: no ACK within timeout", file=sys.stderr)
 
+    def _write_serial_burst_line(line_out: bytes, *, gap_sec: float) -> None:
+        """Write one line for Digicon bulk Red/Unheld — short pace, light ACK wait."""
+        ser.write(line_out)
+        ser.flush()
+        if args.verbose:
+            print(f"MQTT -> serial (burst) {line_out!r}")
+        # Brief window for ACK / status; do not burn 0.35s per head.
+        deadline = time.monotonic() + min(0.12, max(0.02, gap_sec * 2))
+        while time.monotonic() < deadline:
+            line = _read_one_serial_line()
+            if line is None:
+                continue
+            _handle_and_is_ack(line)
+        time.sleep(gap_sec)
+
+    def _run_sml_guard_release() -> None:
+        """All Red → one 3s hold → all Unheld → retain sml_mode disabled."""
+        gap = SML_MODE_SERIAL_GAP_SEC
+        hold = SML_MODE_RED_HOLD_SEC
+        print(
+            f"sml_mode: serial Red-all ({len(DIGICON_PACKED_HEADS)}), "
+            f"hold {hold}s, then Unheld-all (gap={gap}s)"
+        )
+        for packed in DIGICON_PACKED_HEADS:
+            err = packed_mqtt_lcos_node_validation_error(packed)
+            if err is not None:
+                print(f"sml_mode burst skip {packed}: {err}", file=sys.stderr)
+                continue
+            _write_serial_burst_line(
+                f"{SIGNALHEAD_TOPIC_PREFIX}{packed} Red\n".encode("utf-8"),
+                gap_sec=gap,
+            )
+        print(f"sml_mode: holding Red {hold}s before Unheld")
+        # Keep draining serial during the hold so status lines do not backlog.
+        hold_deadline = time.monotonic() + hold
+        while time.monotonic() < hold_deadline:
+            line = _read_one_serial_line()
+            if line is not None:
+                _handle_and_is_ack(line)
+            else:
+                time.sleep(0.02)
+        for packed in DIGICON_PACKED_HEADS:
+            err = packed_mqtt_lcos_node_validation_error(packed)
+            if err is not None:
+                continue
+            _write_serial_burst_line(
+                f"{SIGNALHEAD_TOPIC_PREFIX}{packed} Unheld\n".encode("utf-8"),
+                gap_sec=gap,
+            )
+        try:
+            info = client.publish(SML_MODE_TOPIC, "disabled", qos=1, retain=True)
+            if hasattr(info, "wait_for_publish"):
+                info.wait_for_publish(timeout=3.0)
+            if args.verbose:
+                print(f"TX -> {SML_MODE_TOPIC} disabled")
+        except Exception as e:
+            print(f"sml_mode disabled publish failed: {e}", file=sys.stderr)
+
     try:
         while not stop:
             try:
@@ -764,6 +806,9 @@ def main() -> int:
                         line_out = serial_cmd_queue.get_nowait()
                     except queue.Empty:
                         break
+                    if line_out is SML_GUARD_RELEASE:
+                        _run_sml_guard_release()
+                        continue
                     _write_serial_cmd(line_out)
 
                 while True:
