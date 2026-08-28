@@ -82,6 +82,19 @@ class DigiconSmlGuardTest(unittest.TestCase):
         guard._on_timeout(3)
         self.assertTrue(q.empty())
 
+    def test_publish_head_mirrors_red_then_unheld_on_mqtt(self) -> None:
+        client = _FakeClient()
+        guard = DigiconSmlGuard(client, queue.Queue(), verbose=False, packed_heads=("432",))
+        guard.publish_head_to_mqtt("432", "Red")
+        guard.publish_head_to_mqtt("432", "Unheld")
+        self.assertEqual(
+            client.published,
+            [("track/signalhead/432", "Red"), ("track/signalhead/432", "Unheld")],
+        )
+        self.assertTrue(guard.consume_own_signalhead("track/signalhead/432", "Red"))
+        self.assertTrue(guard.consume_own_signalhead("track/signalhead/432", "Unheld"))
+        self.assertFalse(guard.consume_own_signalhead("track/signalhead/432", "Unheld"))
+
 
 if __name__ == "__main__":
     unittest.main()

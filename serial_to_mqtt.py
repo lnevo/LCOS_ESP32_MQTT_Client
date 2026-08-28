@@ -22,7 +22,8 @@ OFFLINE), only if retained/last sml_mode is **enabled**, publish "query". A live
 with SML Enabled replies "enabled". If no reply within SML_MODE_QUERY_TIMEOUT_SEC, publish
 retained **"disabling"** immediately, wait SML_MODE_DISABLING_WAIT_SEC (live Digicon may
 still ACK "enabled" and abort), then one Red/Unheld burst for DIGICON_PACKED_HEADS
-(currently 432 only) → retain "disabled". Duplicate track/state OFFLINE is ignored
+(currently 432 only) on serial **and** MQTT (`track/signalhead/<packed>` Red, then Unheld)
+→ retain "disabled". Duplicate track/state OFFLINE is ignored
 while a challenge/RELEASE is already in flight. If sml_mode is already
 disabled/missing, skip — no radio storm.
 
@@ -251,6 +252,8 @@ class DigiconSmlGuard:
         self._generation = 0
         # Last steady sml_mode from retain/live (enabled|disabled); ignore query/disabling.
         self._last_mode: str | None = None
+        # Own Red/Unheld MQTT publishes so the subscribe path does not re-queue serial.
+        self._own_signalhead: list[tuple[str, str]] = []
 
     @property
     def packed_heads(self) -> tuple[str, ...]:
@@ -260,6 +263,31 @@ class DigiconSmlGuard:
         """True while query-wait, RELEASE queued, or Red/Unheld burst is running."""
         with self._lock:
             return self._waiting or self._releasing or self._release_queued
+
+    def publish_head_to_mqtt(self, packed: str, payload: str) -> None:
+        """Mirror a guard Red/Unheld onto the broker (serial write is unchanged)."""
+        topic = f"{SIGNALHEAD_TOPIC_PREFIX}{packed}"
+        body = str(payload).strip()
+        with self._lock:
+            self._own_signalhead.append((topic, body.lower()))
+        try:
+            info = self._client.publish(topic, body, qos=1, retain=False)
+            if hasattr(info, "wait_for_publish"):
+                info.wait_for_publish(timeout=3.0)
+        except Exception as e:
+            print(f"sml_mode MQTT {topic} {body} publish failed: {e}", file=sys.stderr)
+            return
+        print(f"TX -> {topic} {body}")
+
+    def consume_own_signalhead(self, topic: str, payload: str) -> bool:
+        """True if this MQTT delivery is our own Red/Unheld mirror (do not serial it)."""
+        key = (str(topic), str(payload).strip().lower())
+        with self._lock:
+            try:
+                self._own_signalhead.remove(key)
+            except ValueError:
+                return False
+        return True
 
     def maybe_start_challenge(self, reason: str) -> None:
         """Query+RELEASE only when Digicon was left in enabled (stuck SET risk)."""
@@ -670,6 +698,20 @@ def main() -> int:
         if signal_m is not None:
             if not args.restore and bool(getattr(msg, "retain", False)):
                 return
+            try:
+                _own_body = msg.payload.decode("utf-8", errors="replace").strip()
+            except Exception:
+                _own_body = ""
+            if (
+                isinstance(guard, DigiconSmlGuard)
+                and _own_body
+                and guard.consume_own_signalhead(msg.topic, _own_body)
+            ):
+                if args.verbose:
+                    print(
+                        f"MQTT signalhead ignored (own TX echo): {msg.topic!r} {_own_body}"
+                    )
+                return
             if isinstance(guard, DigiconSmlGuard) and guard.is_in_flight():
                 if args.verbose:
                     print(
@@ -929,6 +971,7 @@ def main() -> int:
                 f"{SIGNALHEAD_TOPIC_PREFIX}{packed} Red\n".encode("utf-8"),
                 gap_sec=gap,
             )
+            sml_guard.publish_head_to_mqtt(packed, "Red")
         print(f"sml_mode: holding Red {hold}s before Unheld")
         hold_deadline = time.monotonic() + hold
         while time.monotonic() < hold_deadline:
@@ -953,6 +996,7 @@ def main() -> int:
                 f"{SIGNALHEAD_TOPIC_PREFIX}{packed} Unheld\n".encode("utf-8"),
                 gap_sec=gap,
             )
+            sml_guard.publish_head_to_mqtt(packed, "Unheld")
         sml_guard.finish_disabled()
 
     try:

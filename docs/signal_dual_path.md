@@ -39,7 +39,7 @@ Retained **`track/bridge/sml_mode`**: `enabled` | `disabling` | `disabled` | `qu
 |-------|----------------|
 | Bridge start / live `track/state` **OFFLINE** | Read last `sml_mode`. **Only if `enabled`**, publish `query` and wait ~5s. Extra OFFLINE while in flight is ignored |
 | Digicon JMRI (SML Enabled) replies `enabled` | Cancel — leave field alone |
-| No ACK (was enabled, controller gone) | Retain **`disabling`**, wait ~3s (late Digicon `enabled` aborts); else **one** Red → hold → Unheld for `DIGICON_PACKED_HEADS` → retain `disabled` |
+| No ACK (was enabled, controller gone) | Retain **`disabling`**, wait ~3s (late Digicon `enabled` aborts); else **one** serial Red → hold → Unheld for `DIGICON_PACKED_HEADS`, mirrored on MQTT as `track/signalhead/<packed>` **Red** then **Unheld** → retain `disabled` |
 | Digicon sees `disabling` while Enabled | Replies `enabled` so bridge suspends RELEASE |
 | `sml_mode` already `disabled` / missing | **Skip** — no Red/Unheld storm |
 | Inbound `signalhead` during RELEASE | Dropped so a dying Digicon cannot stack extra Unhelds |
