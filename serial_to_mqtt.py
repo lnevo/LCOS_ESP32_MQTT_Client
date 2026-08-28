@@ -108,7 +108,6 @@ _TURNOUT_FLAT_PAYLOAD_RE = re.compile(r"^\d+\s+(THROWN|CLOSED|TOGGLE|ON|OFF)\s*$
 # Disable with FORWARD_SIGNALHEAD_CMDS = False (or omit --signalhead when already False).
 FORWARD_SIGNALHEAD_CMDS = True
 SIGNALHEAD_TOPIC_PREFIX = "track/signalhead/"
-SIGNALHEAD_SUBSCRIBE = "track/signalhead/#"
 # Packed digits; optional legacy IH prefix still accepted.
 _SIGNALHEAD_TOPIC_RE = re.compile(r"^track/signalhead/(?:IH)?(\d+)$", re.IGNORECASE)
 _SIGNALHEAD_APPEARANCE_RE = re.compile(
@@ -118,7 +117,8 @@ _SIGNALHEAD_APPEARANCE_RE = re.compile(
 )
 
 # Digicon packed heads (cats/data/signal_wiring.csv). Keep in sync with HEAD_NAMES.
-DIGICON_PACKED_HEADS = (
+# Full catalog kept for restore when more LCOS signals are live.
+DIGICON_PACKED_HEADS_ALL = (
     "432",
     "433",
     "434",
@@ -155,6 +155,12 @@ DIGICON_PACKED_HEADS = (
     "141",
     "142",
     "143",
+)
+# TEST LIMIT: only IH432 is live on LCOS. Use DIGICON_PACKED_HEADS_ALL to restore.
+DIGICON_PACKED_HEADS = ("432",)
+# Subscribe per active packed head (not #) so other Digicon topics stay off serial.
+SIGNALHEAD_SUBSCRIBE_TOPICS = tuple(
+    f"{SIGNALHEAD_TOPIC_PREFIX}{p}" for p in DIGICON_PACKED_HEADS
 )
 SML_MODE_TOPIC = "track/bridge/sml_mode"
 JMRI_STATE_TOPIC = "track/state"
@@ -569,10 +575,14 @@ def main() -> int:
         _subscribe_line(_client, SML_MODE_TOPIC, qos=1)
         _subscribe_line(_client, JMRI_STATE_TOPIC, qos=1)
         if signalhead_on:
-            _subscribe_line(_client, SIGNALHEAD_SUBSCRIBE, qos=1)
+            for topic in SIGNALHEAD_SUBSCRIBE_TOPICS:
+                _subscribe_line(_client, topic, qos=1)
+            print(
+                f"Signalhead MQTT->serial limited to packed={list(DIGICON_PACKED_HEADS)}"
+            )
         else:
             print(
-                f"Subscribe {SIGNALHEAD_SUBSCRIBE!r}: skipped "
+                "Subscribe signalhead: skipped "
                 "(signalhead->bridge off; use --signalhead to enable)"
             )
         guard = userdata[2] if isinstance(userdata, tuple) and len(userdata) > 2 else None
@@ -653,6 +663,13 @@ def main() -> int:
                     )
                 return
             packed = signal_m.group(1)
+            if packed not in DIGICON_PACKED_HEADS:
+                if args.verbose:
+                    print(
+                        f"MQTT signalhead ignored (not in DIGICON_PACKED_HEADS): "
+                        f"{msg.topic!r}"
+                    )
+                return
             addr_err = packed_mqtt_lcos_node_validation_error(packed)
             if addr_err is not None:
                 print(
