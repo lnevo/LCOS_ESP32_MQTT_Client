@@ -17,16 +17,21 @@ lines, not from the heartbeat path.
 On MQTT connect we publish BRIDGE_STATUS_ONLINE to track/bridge/status (retained). On clean exit we
 publish BRIDGE_STATUS_OFFLINE (best-effort before disconnect).
 
-Turnout commands: subscribe to track/cmd/turnout/# (JMRI: topic track/cmd/turnout/<packed>, payload
-THROWN, CLOSED, or TOGGLE). Optionally still accept flat topic track/cmd/turnout with payload
-"<packed> THROWN". Serial to the Nano is always
-"track/cmd/turnout/<packed> THROWN|CLOSED|TOGGLE\\n" (same shape as JMRI topic + payload).
-TOGGLE is LCOS ALIGN_TOGGLE (API data2=3); JMRI does not send it.
+Digicon SML guard (track/bridge/sml_mode): on bridge start and on track/state OFFLINE we publish
+retained "query". A Digicon JMRI with SML Enabled replies "enabled". If no reply within
+SML_MODE_QUERY_TIMEOUT_SEC, we SET all Digicon heads Red, wait 3s, then Unheld (RELEASE), and
+retain "disabled".
 
-SignalHead commands: subscribe to track/signalhead/# (Digicon/JMRI Virtual: topic
-track/signalhead/IH<packed>, payload Red|Yellow|Green|Dark|… or Release|Get). Forwarded as the
-same line shape to serial; Nano sets aspect then RELEASE (API data1=3) so command mode does not
-stick; Release/Get alone are also accepted. IH464 maps to the same LCOS object as signalmast/464.
+Turnout commands: subscribe to track/cmd/turnout/# (JMRI: topic track/cmd/turnout/<packed>, payload
+THROWN, CLOSED, TOGGLE, or ON/OFF for relay UIDs). Optionally still accept flat topic
+track/cmd/turnout with payload "<packed> THROWN". Serial to the Nano is always
+"track/cmd/turnout/<packed> …\\n". Packed UIDs 51–66 (Relay Obj) are sent as LCOS
+EVENT_CONTROL_CMD on/off; 8–15 remain turnout ALIGN_*. TOGGLE is LCOS ALIGN_TOGGLE (turnouts only).
+
+SignalHead → Nano: on by default (FORWARD_SIGNALHEAD_CMDS). Digicon/JMRI publish
+track/signalhead/<packed> Red|Yellow|Green|… (no IH in the topic); firmware sends
+EVENT_SIGNAL_CMD set-only (no auto-RELEASE; signalmast echo off unless compiled on).
+Opt out with FORWARD_SIGNALHEAD_CMDS = False.
 
 Usage:
   Windows:  run_serial_mqtt.cmd [-h|/?|...] [verbose] [debug] [heartbeat] [restore] [-- python-args...]
@@ -44,6 +49,7 @@ import queue
 import re
 import signal
 import sys
+import threading
 import time
 
 import serial
@@ -92,19 +98,66 @@ CMD_TURNOUT_TOPIC = "track/cmd/turnout"
 # Wildcard subscription: receive track/cmd/turnout/408, payload THROWN|CLOSED|TOGGLE.
 CMD_TURNOUT_SUBSCRIBE = "track/cmd/turnout/#"
 _TURNOUT_HIER_TOPIC_RE = re.compile(r"^track/cmd/turnout/(\d+)$")
-_TURNOUT_STATE_RE = re.compile(r"^(THROWN|CLOSED|TOGGLE)\s*$", re.IGNORECASE)
+_TURNOUT_STATE_RE = re.compile(r"^(THROWN|CLOSED|TOGGLE|ON|OFF)\s*$", re.IGNORECASE)
 # Legacy: single topic track/cmd/turnout, payload "408 THROWN".
-_TURNOUT_FLAT_PAYLOAD_RE = re.compile(r"^\d+\s+(THROWN|CLOSED|TOGGLE)\s*$", re.IGNORECASE)
+_TURNOUT_FLAT_PAYLOAD_RE = re.compile(r"^\d+\s+(THROWN|CLOSED|TOGGLE|ON|OFF)\s*$", re.IGNORECASE)
 
-# Digicon / JMRI Virtual heads → LCOS SIGNAL_CMD (status still on track/signalmast/<packed>).
+# Digicon / JMRI Virtual heads → LCOS SIGNAL_CMD (set-only on firmware). On by default.
+# Disable with FORWARD_SIGNALHEAD_CMDS = False (or omit --signalhead when already False).
+FORWARD_SIGNALHEAD_CMDS = True
 SIGNALHEAD_TOPIC_PREFIX = "track/signalhead/"
 SIGNALHEAD_SUBSCRIBE = "track/signalhead/#"
-_SIGNALHEAD_IH_TOPIC_RE = re.compile(r"^track/signalhead/(IH\d+)$", re.IGNORECASE)
+# Packed digits; optional legacy IH prefix still accepted.
+_SIGNALHEAD_TOPIC_RE = re.compile(r"^track/signalhead/(?:IH)?(\d+)$", re.IGNORECASE)
 _SIGNALHEAD_APPEARANCE_RE = re.compile(
     r"^(Red|Yellow|Green|Dark|Off|FlashRed|FlashYellow|FlashGreen|Lunar|FlashLunar|"
     r"Stop|Approach|Clear|Release|Unheld|Get|Query)\s*$",
     re.IGNORECASE,
 )
+
+# Digicon packed heads (cats/data/signal_wiring.csv). Keep in sync with HEAD_NAMES.
+DIGICON_PACKED_HEADS = (
+    "432",
+    "433",
+    "434",
+    "436",
+    "437",
+    "438",
+    "439",
+    "1332",
+    "1333",
+    "1334",
+    "1335",
+    "1336",
+    "1337",
+    "1338",
+    "1232",
+    "1233",
+    "1234",
+    "1235",
+    "1236",
+    "1237",
+    "1238",
+    "1239",
+    "1240",
+    "1241",
+    "132",
+    "133",
+    "134",
+    "135",
+    "136",
+    "137",
+    "138",
+    "139",
+    "140",
+    "141",
+    "142",
+    "143",
+)
+SML_MODE_TOPIC = "track/bridge/sml_mode"
+JMRI_STATE_TOPIC = "track/state"
+SML_MODE_QUERY_TIMEOUT_SEC = 5.0
+SML_MODE_RED_HOLD_SEC = 3.0
 
 
 def packed_mqtt_lcos_node_validation_error(packed: str) -> str | None:
@@ -149,6 +202,119 @@ def _publish_bridge_status(
     except Exception as e:
         print(f"MQTT bridge status publish failed ({payload!r}): {e}", file=sys.stderr)
         return False
+
+
+class DigiconSmlGuard:
+    """Challenge Digicon JMRI via sml_mode=query; RELEASE all heads if no enabled ACK."""
+
+    def __init__(
+        self,
+        client: mqtt.Client,
+        serial_cmd_queue: queue.Queue,
+        *,
+        verbose: bool,
+        packed_heads: tuple[str, ...] = DIGICON_PACKED_HEADS,
+        query_timeout_sec: float = SML_MODE_QUERY_TIMEOUT_SEC,
+        red_hold_sec: float = SML_MODE_RED_HOLD_SEC,
+    ) -> None:
+        self._client = client
+        self._cmd_q = serial_cmd_queue
+        self._verbose = verbose
+        self._packed = packed_heads
+        self._query_timeout_sec = query_timeout_sec
+        self._red_hold_sec = red_hold_sec
+        self._lock = threading.Lock()
+        self._waiting = False
+        self._got_enabled = False
+        self._timer: threading.Timer | None = None
+        self._generation = 0
+
+    def start_challenge(self, reason: str) -> None:
+        with self._lock:
+            self._generation += 1
+            gen = self._generation
+            self._waiting = True
+            self._got_enabled = False
+            if self._timer is not None:
+                self._timer.cancel()
+                self._timer = None
+            try:
+                info = self._client.publish(SML_MODE_TOPIC, "query", qos=1, retain=True)
+                if hasattr(info, "wait_for_publish"):
+                    info.wait_for_publish(timeout=3.0)
+            except Exception as e:
+                print(f"sml_mode query publish failed: {e}", file=sys.stderr)
+                self._waiting = False
+                return
+            if self._verbose:
+                print(f"TX -> {SML_MODE_TOPIC} query ({reason})")
+            self._timer = threading.Timer(
+                self._query_timeout_sec, self._on_timeout, args=(gen,)
+            )
+            self._timer.daemon = True
+            self._timer.start()
+
+    def on_sml_mode_message(self, payload: str) -> None:
+        mode = payload.strip().lower()
+        with self._lock:
+            if not self._waiting:
+                return
+            if mode == "enabled":
+                self._got_enabled = True
+                self._waiting = False
+                if self._timer is not None:
+                    self._timer.cancel()
+                    self._timer = None
+                if self._verbose:
+                    print(f"sml_mode: ACK enabled — cancel RELEASE")
+                return
+            # query/disabled while waiting: ignore (our query echo or stale)
+
+    def _on_timeout(self, generation: int) -> None:
+        with self._lock:
+            if generation != self._generation or not self._waiting:
+                return
+            if self._got_enabled:
+                self._waiting = False
+                return
+            self._waiting = False
+            self._timer = None
+        print(
+            f"sml_mode: no enabled ACK within {self._query_timeout_sec}s — "
+            f"Red then Unheld for {len(self._packed)} Digicon heads"
+        )
+        self._fanout_appearance("Red")
+        time.sleep(self._red_hold_sec)
+        self._fanout_appearance("Unheld")
+        try:
+            info = self._client.publish(SML_MODE_TOPIC, "disabled", qos=1, retain=True)
+            if hasattr(info, "wait_for_publish"):
+                info.wait_for_publish(timeout=3.0)
+            if self._verbose:
+                print(f"TX -> {SML_MODE_TOPIC} disabled")
+        except Exception as e:
+            print(f"sml_mode disabled publish failed: {e}", file=sys.stderr)
+
+    def _fanout_appearance(self, appearance: str) -> None:
+        for packed in self._packed:
+            err = packed_mqtt_lcos_node_validation_error(packed)
+            if err is not None:
+                print(f"sml_mode fan-out skip {packed}: {err}", file=sys.stderr)
+                continue
+            line = f"{SIGNALHEAD_TOPIC_PREFIX}{packed} {appearance}\n".encode("utf-8")
+            try:
+                self._cmd_q.put_nowait(line)
+                if self._verbose:
+                    print(f"sml_mode queue serial: {line!r}")
+            except queue.Full:
+                print(f"sml_mode: serial queue full dropping {packed} {appearance}", file=sys.stderr)
+
+    def stop(self) -> None:
+        with self._lock:
+            self._waiting = False
+            if self._timer is not None:
+                self._timer.cancel()
+                self._timer = None
 
 
 def parse_line(line: str) -> tuple[str, str] | None:
@@ -275,19 +441,27 @@ def main() -> int:
         "-r",
         "--restore",
         action="store_true",
-        help="Apply retained MQTT messages on subscribe (turnout/signalhead cmds to serial; "
-        "retained heartbeat PING if enabled)",
+        help="Apply retained MQTT messages on subscribe (turnout cmds to serial; "
+        "signalhead too if --signalhead; retained heartbeat PING if enabled)",
+    )
+    ap.add_argument(
+        "--signalhead",
+        action="store_true",
+        help="Forward track/signalhead/<packed> MQTT to serial (EVENT_SIGNAL_CMD). "
+        "On by default via FORWARD_SIGNALHEAD_CMDS; this flag forces on.",
     )
     args = ap.parse_args()
 
     heartbeat_on = bool(DEBUG_HEARTBEAT or args.debug_heartbeat)
+    signalhead_on = bool(FORWARD_SIGNALHEAD_CMDS or args.signalhead)
 
     ping_cmd_queue: queue.Queue[object] = queue.Queue(maxsize=32)
     # Shared serial outbound queue for turnout + signalhead command lines.
-    serial_cmd_queue: queue.Queue[bytes] = queue.Queue(maxsize=64)
+    serial_cmd_queue: queue.Queue[bytes] = queue.Queue(maxsize=128)
 
     client = _make_mqtt_client()
-    client.user_data_set((ping_cmd_queue, serial_cmd_queue))
+    sml_guard = DigiconSmlGuard(client, serial_cmd_queue, verbose=args.verbose)
+    client.user_data_set((ping_cmd_queue, serial_cmd_queue, sml_guard))
 
     def _subscribe_line(_client: mqtt.Client, topic: str, qos: int = 1) -> None:
         res = _client.subscribe(topic, qos=qos)
@@ -314,16 +488,28 @@ def main() -> int:
                     file=sys.stderr,
                 )
 
-    def on_connect(_client, _userdata, _flags, reason_code, _properties=None):
+    def on_connect(_client, userdata, _flags, reason_code, _properties=None):
         if not _mqtt_connect_ok(reason_code):
             return
         if heartbeat_on:
             _subscribe_line(_client, HEARTBEAT_MQTT_TOPIC, qos=1)
         _subscribe_line(_client, CMD_TURNOUT_SUBSCRIBE, qos=1)
-        _subscribe_line(_client, SIGNALHEAD_SUBSCRIBE, qos=1)
+        _subscribe_line(_client, SML_MODE_TOPIC, qos=1)
+        _subscribe_line(_client, JMRI_STATE_TOPIC, qos=1)
+        if signalhead_on:
+            _subscribe_line(_client, SIGNALHEAD_SUBSCRIBE, qos=1)
+        else:
+            print(
+                f"Subscribe {SIGNALHEAD_SUBSCRIBE!r}: skipped "
+                "(signalhead->bridge off; use --signalhead to enable)"
+            )
+        guard = userdata[2] if isinstance(userdata, tuple) and len(userdata) > 2 else None
+        if isinstance(guard, DigiconSmlGuard):
+            # Defer slightly so subscriptions are active before query.
+            threading.Timer(0.5, guard.start_challenge, args=("bridge-start",)).start()
 
     def on_message(_client, userdata, msg):
-        ping_q, cmd_q = userdata
+        ping_q, cmd_q, guard = userdata
         if heartbeat_on and msg.topic == HEARTBEAT_MQTT_TOPIC:
             if not args.restore and bool(getattr(msg, "retain", False)):
                 return
@@ -341,8 +527,34 @@ def main() -> int:
                 pass
             return
 
-        # --- signalhead IH* ---
-        signal_m = _SIGNALHEAD_IH_TOPIC_RE.match(msg.topic)
+        if msg.topic == SML_MODE_TOPIC:
+            try:
+                body = msg.payload.decode("utf-8", errors="replace").strip()
+            except Exception:
+                return
+            if isinstance(guard, DigiconSmlGuard):
+                guard.on_sml_mode_message(body)
+            return
+
+        if msg.topic == JMRI_STATE_TOPIC:
+            if bool(getattr(msg, "retain", False)) and not args.restore:
+                # Still honor retained OFFLINE after reconnect? Prefer live only.
+                # Live OFFLINE is the kill/quit signal; skip retain on subscribe.
+                return
+            try:
+                body = msg.payload.decode("utf-8", errors="replace").strip().upper()
+            except Exception:
+                return
+            if body == "OFFLINE" and isinstance(guard, DigiconSmlGuard):
+                if args.verbose:
+                    print("MQTT track/state OFFLINE -> sml_mode query")
+                guard.start_challenge("jmri-offline")
+            return
+
+        # --- signalhead/<packed> (optional legacy IH prefix) ---
+        if not signalhead_on and msg.topic.startswith(SIGNALHEAD_TOPIC_PREFIX):
+            return
+        signal_m = _SIGNALHEAD_TOPIC_RE.match(msg.topic)
         if signal_m is not None:
             if not args.restore and bool(getattr(msg, "retain", False)):
                 return
@@ -366,8 +578,7 @@ def main() -> int:
                         f"(or Flash*/Lunar/Stop/Approach/Clear/Release/Get); decoded={body!r}"
                     )
                 return
-            ih_name = signal_m.group(1).upper()
-            packed = ih_name[2:]
+            packed = signal_m.group(1)
             addr_err = packed_mqtt_lcos_node_validation_error(packed)
             if addr_err is not None:
                 print(
@@ -375,13 +586,13 @@ def main() -> int:
                     file=sys.stderr,
                 )
                 return
-            line = f"{SIGNALHEAD_TOPIC_PREFIX}{ih_name} {body}\n".encode("utf-8")
+            line = f"{SIGNALHEAD_TOPIC_PREFIX}{packed} {body}\n".encode("utf-8")
             _queue_serial_cmd(cmd_q, line, label="signalhead")
             return
         if msg.topic.startswith(SIGNALHEAD_TOPIC_PREFIX):
             if args.verbose:
                 print(
-                    f"MQTT signalhead ignored (need IH + digits): {msg.topic!r}",
+                    f"MQTT signalhead ignored (need packed digits): {msg.topic!r}",
                     file=sys.stderr,
                 )
             return
@@ -418,7 +629,7 @@ def main() -> int:
                 if args.verbose:
                     print(
                         "MQTT turnout cmd rejected (hierarchical topic): expected payload "
-                        f"THROWN, CLOSED, or TOGGLE; decoded={body!r}"
+                        f"THROWN, CLOSED, TOGGLE, ON, or OFF; decoded={body!r}"
                     )
                 return
             state = body
@@ -461,7 +672,12 @@ def main() -> int:
         return 1
 
     print(f"Connected to MQTT broker at {args.broker}")
-    print(f"Opening {args.com} @ {args.baud} baud — Serial -> MQTT. Ctrl+C to stop.")
+    print(
+        f"Opening {args.com} @ {args.baud} baud - Serial -> MQTT"
+        f"{'; signalhead->serial ON' if signalhead_on else '; signalhead->serial OFF'}"
+        f"; Digicon sml_mode guard ON"
+        ". Ctrl+C to stop."
+    )
 
     stop = False
 
@@ -576,6 +792,7 @@ def main() -> int:
                 print(f"Serial error: {e}", file=sys.stderr)
                 time.sleep(0.5)
     finally:
+        sml_guard.stop()
         if bridge_online_published:
             _publish_bridge_status(client, BRIDGE_STATUS_OFFLINE, verbose=args.verbose)
         ser.close()

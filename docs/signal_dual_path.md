@@ -1,8 +1,10 @@
-# Dual-path signals: IH command vs signalmast status (API packing)
+# Dual-path signals: status vs Digicon IH vs relay lamps
+
+**Checkpoint (IH SIGNAL_CMD experiments):** tag `working-ih-signalhead-2026-08-12`.
+
+## Status (field → MQTT)
 
 **Source of truth:** `reference/LCOS Public API.xlsx` UID Map + `lcos/lcos.h` (`UID_OFFSET_SIGNALS` 32).
-
-## Packing
 
 ```text
 packed = displayNode * 100 + UID
@@ -10,24 +12,35 @@ UID    = 32 + signal_index     # Signal 0 → 32 … Signal 15 → 47
 Node 4 Signal 0 → 432
 ```
 
-Do **not** add `UID_OFFSET_SIGNALS` again on status publish (that produced MQTT **464**, which is Relay Obj 13 in the UID map, not a signal).
-
-## Topics
+Do **not** add `UID_OFFSET_SIGNALS` again on status publish (that produced MQTT **464**, which is Relay Obj 13).
 
 | Direction | Topic | Payload |
 |-----------|-------|---------|
-| JMRI → LCOS | `track/signalhead/IH432` or `track/signalmast/432` | Red/Yellow/Green or Stop/Approach/Clear |
-| LCOS → JMRI | `track/signalmast/432` | `Stop; Lit; Unheld` |
+| LCOS → JMRI | `track/signalmast/432` | `Stop; Lit; Unheld` (etc.) |
+| Digicon set → JMRI (echo) | same | **off** (`MQTT_PUBLISH_SIGNALMAST_ON_SET` = 0) while testing field SoR |
 
-`EVENT_SIGNAL_CMD` radio frames are not republished. Status never goes on `signalhead`.
+`EVENT_SIGNAL_CMD` radio frames from the field are not republished (bogus UIDs). Status never goes on `signalhead`.
 
-## Aspect map (`lcos.h` / status table)
+## Digicon Virtual heads (IH)
 
-| MQTT | LCOS `data2` |
-|------|--------------|
-| Red / Stop | `SIGNAL_STOP` (1) |
-| Yellow / Approach | `SIGNAL_APPROACH` (2) |
-| Green / Clear | `SIGNAL_CLEAR` (3) |
-| Dark / Off | `0` |
+**MQTT topic:** `track/signalhead/<packed>` (no `IH` in the leaf). JMRI beans remain `IH###`.
 
-Brick Digicon uses JMRI MQTT mast `IF$mqm:AAR-1946:SL-1-high-abs($432)` → topic `track/signalmast/432`.
+**Python on by default** (`FORWARD_SIGNALHEAD_CMDS = True`): forwards those topics → Nano.
+
+**Firmware:** `EVENT_SIGNAL_CMD` **set only** (no auto-RELEASE). Optional legacy `IH` prefix on the serial line still accepted. Explicit MQTT payloads `Release` / `Unheld` / `Get` still work for probes.
+
+## Digicon SML mode guard (`serial_to_mqtt.py`)
+
+Retained **`track/bridge/sml_mode`**: `enabled` | `disabled` | `query`.
+
+| Event | Bridge action |
+|-------|----------------|
+| Bridge start, or live `track/state` **OFFLINE** | Publish retained `query`; wait ~5s |
+| Digicon JMRI (SML Enabled) replies `enabled` | Cancel — leave field alone |
+| No ACK | SET all Digicon packed heads **Red**, wait 3s, **Unheld** RELEASE, retain `disabled` |
+
+JMRI Digicon script owns Enable→Disable `Unheld` and per-mast SML-off `Unheld`. Boot into Disabled does **not** RELEASE.
+
+## Brick lamps (interim)
+
+See **`docs/signal_relay_lamps.md`**: MQTT turnouts `M2T452/453/454` → Relay Obj 1/2/3 → Stop/Approach/Clear.
