@@ -21,8 +21,10 @@ Digicon SML guard (track/bridge/sml_mode): on bridge start (and JMRI track/state
 OFFLINE), only if retained/last sml_mode is **enabled**, publish "query". A live Digicon
 with SML Enabled replies "enabled". If no reply within SML_MODE_QUERY_TIMEOUT_SEC, publish
 retained **"disabling"** immediately, wait SML_MODE_DISABLING_WAIT_SEC (live Digicon may
-still ACK "enabled" and abort), then Red-all → one hold → Unheld-all → retain "disabled".
-If sml_mode is already disabled/missing, skip — no radio storm.
+still ACK "enabled" and abort), then one Red/Unheld burst for DIGICON_PACKED_HEADS
+(currently 432 only) → retain "disabled". Duplicate track/state OFFLINE is ignored
+while a challenge/RELEASE is already in flight. If sml_mode is already
+disabled/missing, skip — no radio storm.
 
 Turnout commands: subscribe to track/cmd/turnout/# (JMRI: topic track/cmd/turnout/<packed>, payload
 THROWN, CLOSED, TOGGLE, or ON/OFF for relay UIDs). Optionally still accept flat topic
@@ -243,16 +245,33 @@ class DigiconSmlGuard:
         self._waiting = False
         self._got_enabled = False
         self._releasing = False
+        self._release_queued = False
         self._abort_release = False
         self._timer: threading.Timer | None = None
         self._generation = 0
         # Last steady sml_mode from retain/live (enabled|disabled); ignore query/disabling.
         self._last_mode: str | None = None
 
+    @property
+    def packed_heads(self) -> tuple[str, ...]:
+        return self._packed
+
+    def is_in_flight(self) -> bool:
+        """True while query-wait, RELEASE queued, or Red/Unheld burst is running."""
+        with self._lock:
+            return self._waiting or self._releasing or self._release_queued
+
     def maybe_start_challenge(self, reason: str) -> None:
         """Query+RELEASE only when Digicon was left in enabled (stuck SET risk)."""
         with self._lock:
             mode = self._last_mode
+            in_flight = self._waiting or self._releasing or self._release_queued
+        if in_flight:
+            print(
+                f"sml_mode: skip challenge ({reason}); "
+                "already waiting/releasing (one Unheld burst)"
+            )
+            return
         if mode != "enabled":
             print(
                 f"sml_mode: skip challenge ({reason}); "
@@ -321,6 +340,7 @@ class DigiconSmlGuard:
         """
         with self._lock:
             self._releasing = True
+            self._release_queued = False
             self._abort_release = False
         try:
             info = self._client.publish(SML_MODE_TOPIC, "disabling", qos=1, retain=True)
@@ -352,6 +372,7 @@ class DigiconSmlGuard:
         """Retain disabled after a completed RELEASE burst."""
         with self._lock:
             self._releasing = False
+            self._release_queued = False
             self._last_mode = "disabled"
         try:
             info = self._client.publish(SML_MODE_TOPIC, "disabled", qos=1, retain=True)
@@ -365,6 +386,7 @@ class DigiconSmlGuard:
         """Digicon reclaimed control mid-burst; leave mode as Digicon published."""
         with self._lock:
             self._releasing = False
+            self._release_queued = False
             self._abort_release = False
 
     def _on_timeout(self, generation: int) -> None:
@@ -376,20 +398,26 @@ class DigiconSmlGuard:
                 return
             self._waiting = False
             self._timer = None
+            if self._release_queued or self._releasing:
+                return
+            self._release_queued = True
         print(
             f"sml_mode: enabled but no live ACK within {self._query_timeout_sec}s — "
-            f"queue disabling / Red-all / Unheld "
-            f"({len(self._packed)} Digicon heads)"
+            f"queue disabling / Red / Unheld "
+            f"(packed={list(self._packed)})"
         )
         try:
             self._cmd_q.put_nowait(SML_GUARD_RELEASE)
         except queue.Full:
+            with self._lock:
+                self._release_queued = False
             print("sml_mode: serial queue full; cannot schedule RELEASE", file=sys.stderr)
 
     def stop(self) -> None:
         with self._lock:
             self._waiting = False
             self._releasing = False
+            self._release_queued = False
             if self._timer is not None:
                 self._timer.cancel()
                 self._timer = None
@@ -642,6 +670,13 @@ def main() -> int:
         if signal_m is not None:
             if not args.restore and bool(getattr(msg, "retain", False)):
                 return
+            if isinstance(guard, DigiconSmlGuard) and guard.is_in_flight():
+                if args.verbose:
+                    print(
+                        "MQTT signalhead ignored (sml_mode RELEASE in flight): "
+                        f"{msg.topic!r}"
+                    )
+                return
             if args.verbose:
                 qos = getattr(msg, "qos", "?")
                 ret = getattr(msg, "retain", "?")
@@ -876,11 +911,12 @@ def main() -> int:
             return
         gap = SML_MODE_SERIAL_GAP_SEC
         hold = SML_MODE_RED_HOLD_SEC
+        heads = sml_guard.packed_heads
         print(
-            f"sml_mode: serial Red-all ({len(DIGICON_PACKED_HEADS)}), "
-            f"hold {hold}s, then Unheld-all (gap={gap}s, no ACK wait)"
+            f"sml_mode: serial Red ({list(heads)}), "
+            f"hold {hold}s, then Unheld (gap={gap}s, no ACK wait)"
         )
-        for packed in DIGICON_PACKED_HEADS:
+        for packed in heads:
             if sml_guard.should_abort_release():
                 print("sml_mode: Digicon enabled mid-burst — abort RELEASE")
                 sml_guard.cancel_release()
@@ -905,7 +941,7 @@ def main() -> int:
                 _handle_and_is_ack(line)
             else:
                 time.sleep(0.02)
-        for packed in DIGICON_PACKED_HEADS:
+        for packed in heads:
             if sml_guard.should_abort_release():
                 print("sml_mode: Digicon enabled before Unheld — abort")
                 sml_guard.cancel_release()
