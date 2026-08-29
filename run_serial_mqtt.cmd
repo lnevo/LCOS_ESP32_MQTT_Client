@@ -4,7 +4,7 @@ REM Arduino Nano USB serial <-> MQTT. Defaults: COM3, BROKER below. Edit as need
 cd /d "%~dp0"
 
 set "COM=COM3"
-set "BROKER=192.168.137.1"
+set "BROKER=192.168.137.2"
 set "EXTRA="
 
 :ploop
