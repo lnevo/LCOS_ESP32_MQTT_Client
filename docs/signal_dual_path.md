@@ -41,7 +41,7 @@ Retained **`track/bridge/sml_mode`**: `enabled` | `enabled_on_boot` | `aborting`
 | Digicon JMRI (SML Enabled) replies `enabled` | Cancel — leave field alone |
 | No ACK (was enabled, controller gone) | Retain **`disabling`**, wait ~3s (late Digicon `enabled` aborts); else **one** serial Red → hold → Unheld for `DIGICON_PACKED_HEADS`, mirrored on MQTT as `track/signalhead/<packed>` **Red** then **Unheld** → retain `disabled` |
 | Digicon sees `disabling` while Enabled | Replies `enabled` so bridge suspends RELEASE |
-| Digicon dests stored Enabled | JMRI publishes **`enabled_on_boot`**. Every Digicon agent publishes **`aborting`**, unchecks SML immediately (no Hold/Red/Unheld), then **`aborted`**. After ~3s the Digicon instance publishes **`enabled`** and continues |
+| Digicon dests stored Enabled | That JMRI instance publishes **`enabled_on_boot`** and does **not** abort. **Other** Digicon agents publish **`aborting`**, uncheck immediately (no Hold/Red/Unheld), then **`aborted`**. After ~3s the originator publishes **`enabled`**. Solo boot has nobody to abort. |
 | `enabled_on_boot` / `aborting` / `aborted` | **Watch** ~12s for `enabled`. If it never arrives, same **query → disabling → Red/Unheld → disabled** challenge |
 | `sml_mode` already `disabled` / missing | **Skip** — no Red/Unheld storm |
 | Inbound `signalhead` during RELEASE | Dropped so a dying Digicon cannot stack extra Unhelds |
