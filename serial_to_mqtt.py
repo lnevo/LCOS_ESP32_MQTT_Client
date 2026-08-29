@@ -23,7 +23,7 @@ with SML Enabled replies "enabled". If no reply within SML_MODE_QUERY_TIMEOUT_SE
 retained **"disabling"** immediately, wait SML_MODE_DISABLING_WAIT_SEC (live Digicon may
 still ACK "enabled" and abort), then one Red/Unheld burst for DIGICON_PACKED_HEADS
 (currently 432 only) on serial **and** MQTT (`track/signalhead/<packed>` Red, then Unheld)
-→ retain "disabled". **enabled_on_boot / aborting / aborted** are not treated as
+→ retain "disabled". **enabling / aborting / aborted** are not treated as
 disabled: watch until **enabled** (SML_MODE_BOOT_ABORT_TIMEOUT_SEC); if that never
 arrives, run the same query/disabling/RELEASE path. Duplicate track/state OFFLINE is ignored
 while a challenge/RELEASE is already in flight. If sml_mode is already
@@ -173,9 +173,9 @@ SML_MODE_QUERY_TIMEOUT_SEC = 5.0
 # After query timeout: announce disabling, wait for a late Digicon enabled ACK, then RELEASE.
 SML_MODE_DISABLING_WAIT_SEC = 3.0
 SML_MODE_RED_HOLD_SEC = 3.0
-# enabled_on_boot → aborting → aborted → enabled (publisher ~3s + Hold ~3s). Then challenge.
+# enabling → aborting → aborted → enabled (publisher ~3s + Hold ~3s). Then challenge.
 SML_MODE_BOOT_ABORT_TIMEOUT_SEC = 12.0
-_SML_BOOT_ABORT_MODES = ("enabled_on_boot", "aborting", "aborted")
+_SML_BOOT_ABORT_MODES = ("enabling", "aborting", "aborted")
 # Pace Digicon bulk Red/Unheld on USB serial (seconds between lines).
 SML_MODE_SERIAL_GAP_SEC = 0.05
 # Sentinel queued for main loop: disabling announce → optional abort → Red/hold/Unheld.
@@ -300,7 +300,7 @@ class DigiconSmlGuard:
     def maybe_start_challenge(self, reason: str) -> None:
         """Query+RELEASE only when Digicon was left in enabled (stuck SET risk).
 
-        Boot-abort tokens (enabled_on_boot / aborting / aborted) start a watch
+        Boot-abort tokens (enabling / aborting / aborted) start a watch
         until enabled; they are not skipped as disabled.
         """
         with self._lock:
@@ -366,7 +366,7 @@ class DigiconSmlGuard:
             if mode in ("enabled", "disabled"):
                 self._last_mode = mode
                 self._cancel_boot_abort_timer_locked()
-            elif mode == "enabled_on_boot":
+            elif mode == "enabling":
                 self._last_mode = mode
                 start_watch = True
                 restart_watch = True
