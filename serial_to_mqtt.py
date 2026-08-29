@@ -342,16 +342,21 @@ class DigiconSmlGuard:
             if self._timer is not None:
                 self._timer.cancel()
                 self._timer = None
-            try:
-                info = self._client.publish(SML_MODE_TOPIC, "query", qos=1, retain=True)
-                if hasattr(info, "wait_for_publish"):
-                    info.wait_for_publish(timeout=3.0)
-            except Exception as e:
-                print(f"sml_mode query publish failed: {e}", file=sys.stderr)
-                self._waiting = False
+        try:
+            info = self._client.publish(SML_MODE_TOPIC, "query", qos=1, retain=True)
+            if hasattr(info, "wait_for_publish"):
+                info.wait_for_publish(timeout=3.0)
+        except Exception as e:
+            print(f"sml_mode query publish failed: {e}", file=sys.stderr)
+            with self._lock:
+                if gen == self._generation:
+                    self._waiting = False
+            return
+        if self._verbose:
+            print(f"TX -> {SML_MODE_TOPIC} query ({reason})")
+        with self._lock:
+            if gen != self._generation or not self._waiting:
                 return
-            if self._verbose:
-                print(f"TX -> {SML_MODE_TOPIC} query ({reason})")
             self._timer = threading.Timer(
                 self._query_timeout_sec, self._on_timeout, args=(gen,)
             )
