@@ -95,6 +95,59 @@ class DigiconSmlGuardTest(unittest.TestCase):
         self.assertTrue(guard.consume_own_signalhead("track/signalhead/432", "Unheld"))
         self.assertFalse(guard.consume_own_signalhead("track/signalhead/432", "Unheld"))
 
+    def test_boot_abort_watch_then_enabled_skips_challenge(self) -> None:
+        client = _FakeClient()
+        q: queue.Queue = queue.Queue()
+        guard = DigiconSmlGuard(client, q, verbose=False, packed_heads=("432",))
+        self.addCleanup(guard.stop)
+        guard.on_sml_mode_message("enabled_on_boot")
+        self.assertEqual(guard._last_mode, "enabled_on_boot")
+        self.assertIsNotNone(guard._boot_abort_timer)
+        guard.maybe_start_challenge("bridge-start")
+        self.assertNotIn(("track/bridge/sml_mode", "query"), client.published)
+        guard.on_sml_mode_message("aborting")
+        guard.on_sml_mode_message("aborted")
+        self.assertEqual(guard._last_mode, "aborted")
+        self.assertIsNotNone(guard._boot_abort_timer)
+        guard.on_sml_mode_message("enabled")
+        self.assertEqual(guard._last_mode, "enabled")
+        self.assertIsNone(guard._boot_abort_timer)
+        self.assertTrue(q.empty())
+
+    def test_late_aborted_after_enabled_does_not_restart_watch(self) -> None:
+        client = _FakeClient()
+        q: queue.Queue = queue.Queue()
+        guard = DigiconSmlGuard(client, q, verbose=False, packed_heads=("432",))
+        self.addCleanup(guard.stop)
+        guard.on_sml_mode_message("enabled_on_boot")
+        guard.on_sml_mode_message("enabled")
+        self.assertIsNone(guard._boot_abort_timer)
+        guard.on_sml_mode_message("aborted")
+        self.assertEqual(guard._last_mode, "enabled")
+        self.assertIsNone(guard._boot_abort_timer)
+
+    def test_boot_abort_timeout_starts_challenge(self) -> None:
+        client = _FakeClient()
+        q: queue.Queue = queue.Queue()
+        guard = DigiconSmlGuard(client, q, verbose=False, packed_heads=("432",))
+        self.addCleanup(guard.stop)
+        guard.on_sml_mode_message("aborted")
+        self.assertIsNotNone(guard._boot_abort_timer)
+        guard._boot_abort_timer.cancel()
+        guard._on_boot_abort_timeout()
+        self.assertIn(("track/bridge/sml_mode", "query"), client.published)
+        self.assertTrue(guard.is_in_flight())
+
+    def test_disabled_still_skips_challenge(self) -> None:
+        client = _FakeClient()
+        q: queue.Queue = queue.Queue()
+        guard = DigiconSmlGuard(client, q, verbose=False, packed_heads=("432",))
+        self.addCleanup(guard.stop)
+        guard._last_mode = "disabled"
+        guard.maybe_start_challenge("bridge-start")
+        self.assertNotIn(("track/bridge/sml_mode", "query"), client.published)
+        self.assertTrue(q.empty())
+
 
 if __name__ == "__main__":
     unittest.main()

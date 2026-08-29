@@ -23,7 +23,9 @@ with SML Enabled replies "enabled". If no reply within SML_MODE_QUERY_TIMEOUT_SE
 retained **"disabling"** immediately, wait SML_MODE_DISABLING_WAIT_SEC (live Digicon may
 still ACK "enabled" and abort), then one Red/Unheld burst for DIGICON_PACKED_HEADS
 (currently 432 only) on serial **and** MQTT (`track/signalhead/<packed>` Red, then Unheld)
-→ retain "disabled". Duplicate track/state OFFLINE is ignored
+→ retain "disabled". **enabled_on_boot / aborting / aborted** are not treated as
+disabled: watch until **enabled** (SML_MODE_BOOT_ABORT_TIMEOUT_SEC); if that never
+arrives, run the same query/disabling/RELEASE path. Duplicate track/state OFFLINE is ignored
 while a challenge/RELEASE is already in flight. If sml_mode is already
 disabled/missing, skip — no radio storm.
 
@@ -171,6 +173,9 @@ SML_MODE_QUERY_TIMEOUT_SEC = 5.0
 # After query timeout: announce disabling, wait for a late Digicon enabled ACK, then RELEASE.
 SML_MODE_DISABLING_WAIT_SEC = 3.0
 SML_MODE_RED_HOLD_SEC = 3.0
+# enabled_on_boot → aborting → aborted → enabled (publisher ~3s + Hold ~3s). Then challenge.
+SML_MODE_BOOT_ABORT_TIMEOUT_SEC = 12.0
+_SML_BOOT_ABORT_MODES = ("enabled_on_boot", "aborting", "aborted")
 # Pace Digicon bulk Red/Unheld on USB serial (seconds between lines).
 SML_MODE_SERIAL_GAP_SEC = 0.05
 # Sentinel queued for main loop: disabling announce → optional abort → Red/hold/Unheld.
@@ -234,6 +239,7 @@ class DigiconSmlGuard:
         query_timeout_sec: float = SML_MODE_QUERY_TIMEOUT_SEC,
         disabling_wait_sec: float = SML_MODE_DISABLING_WAIT_SEC,
         red_hold_sec: float = SML_MODE_RED_HOLD_SEC,
+        boot_abort_timeout_sec: float = SML_MODE_BOOT_ABORT_TIMEOUT_SEC,
     ) -> None:
         self._client = client
         self._cmd_q = serial_cmd_queue
@@ -242,6 +248,7 @@ class DigiconSmlGuard:
         self._query_timeout_sec = query_timeout_sec
         self._disabling_wait_sec = disabling_wait_sec
         self._red_hold_sec = red_hold_sec
+        self._boot_abort_timeout_sec = boot_abort_timeout_sec
         self._lock = threading.Lock()
         self._waiting = False
         self._got_enabled = False
@@ -249,8 +256,9 @@ class DigiconSmlGuard:
         self._release_queued = False
         self._abort_release = False
         self._timer: threading.Timer | None = None
+        self._boot_abort_timer: threading.Timer | None = None
         self._generation = 0
-        # Last steady sml_mode from retain/live (enabled|disabled); ignore query/disabling.
+        # Last sml_mode from retain/live. query/disabling are not stored here.
         self._last_mode: str | None = None
         # Own Red/Unheld MQTT publishes so the subscribe path does not re-queue serial.
         self._own_signalhead: list[tuple[str, str]] = []
@@ -290,15 +298,29 @@ class DigiconSmlGuard:
         return True
 
     def maybe_start_challenge(self, reason: str) -> None:
-        """Query+RELEASE only when Digicon was left in enabled (stuck SET risk)."""
+        """Query+RELEASE only when Digicon was left in enabled (stuck SET risk).
+
+        Boot-abort tokens (enabled_on_boot / aborting / aborted) start a watch
+        until enabled; they are not skipped as disabled.
+        """
         with self._lock:
             mode = self._last_mode
             in_flight = self._waiting or self._releasing or self._release_queued
+            watching = self._boot_abort_timer is not None
         if in_flight:
             print(
                 f"sml_mode: skip challenge ({reason}); "
                 "already waiting/releasing (one Unheld burst)"
             )
+            return
+        if mode in _SML_BOOT_ABORT_MODES:
+            if watching:
+                print(
+                    f"sml_mode: skip challenge ({reason}); "
+                    f"watching boot-abort (last_mode={mode!r})"
+                )
+                return
+            self._ensure_boot_abort_watch()
             return
         if mode != "enabled":
             print(
@@ -310,6 +332,7 @@ class DigiconSmlGuard:
 
     def start_challenge(self, reason: str) -> None:
         with self._lock:
+            self._cancel_boot_abort_timer_locked()
             self._generation += 1
             gen = self._generation
             self._waiting = True
@@ -337,25 +360,75 @@ class DigiconSmlGuard:
 
     def on_sml_mode_message(self, payload: str) -> None:
         mode = payload.strip().lower()
+        start_watch = False
+        restart_watch = False
         with self._lock:
             if mode in ("enabled", "disabled"):
                 self._last_mode = mode
+                self._cancel_boot_abort_timer_locked()
+            elif mode == "enabled_on_boot":
+                self._last_mode = mode
+                start_watch = True
+                restart_watch = True
+            elif mode in ("aborting", "aborted"):
+                # Ignore late abort tokens after Digicon already resumed enabled.
+                if self._last_mode != "enabled":
+                    self._last_mode = mode
+                    start_watch = True
             if mode == "enabled" and self._releasing:
                 self._abort_release = True
                 if self._verbose:
                     print("sml_mode: enabled during disabling — abort RELEASE")
-            if not self._waiting:
+            if self._waiting:
+                start_watch = False
+                if mode == "enabled":
+                    self._got_enabled = True
+                    self._waiting = False
+                    if self._timer is not None:
+                        self._timer.cancel()
+                        self._timer = None
+                    if self._verbose:
+                        print("sml_mode: ACK enabled — cancel RELEASE")
+        if start_watch:
+            self._ensure_boot_abort_watch(restart=restart_watch)
+
+    def _cancel_boot_abort_timer_locked(self) -> None:
+        if self._boot_abort_timer is not None:
+            self._boot_abort_timer.cancel()
+            self._boot_abort_timer = None
+
+    def _ensure_boot_abort_watch(self, *, restart: bool = False) -> None:
+        with self._lock:
+            if self._boot_abort_timer is not None:
+                if not restart:
+                    return
+                self._cancel_boot_abort_timer_locked()
+            if self._waiting or self._releasing or self._release_queued:
                 return
-            if mode == "enabled":
-                self._got_enabled = True
-                self._waiting = False
-                if self._timer is not None:
-                    self._timer.cancel()
-                    self._timer = None
-                if self._verbose:
-                    print("sml_mode: ACK enabled — cancel RELEASE")
-                return
-            # query/disabled/disabling while waiting: ignore (our echo or stale)
+            self._boot_abort_timer = threading.Timer(
+                self._boot_abort_timeout_sec, self._on_boot_abort_timeout
+            )
+            self._boot_abort_timer.daemon = True
+            self._boot_abort_timer.start()
+        print(
+            f"sml_mode: watching boot-abort until enabled "
+            f"({self._boot_abort_timeout_sec:.0f}s)"
+        )
+
+    def _on_boot_abort_timeout(self) -> None:
+        with self._lock:
+            self._boot_abort_timer = None
+            mode = self._last_mode
+            in_flight = self._waiting or self._releasing or self._release_queued
+        if mode in ("enabled", "disabled"):
+            return
+        if in_flight:
+            return
+        print(
+            f"sml_mode: boot-abort ({mode!r}) did not reach enabled within "
+            f"{self._boot_abort_timeout_sec:.0f}s — challenge"
+        )
+        self.start_challenge("boot-abort-incomplete")
 
     def should_abort_release(self) -> bool:
         with self._lock:
@@ -446,6 +519,7 @@ class DigiconSmlGuard:
             self._waiting = False
             self._releasing = False
             self._release_queued = False
+            self._cancel_boot_abort_timer_locked()
             if self._timer is not None:
                 self._timer.cancel()
                 self._timer = None
@@ -643,7 +717,7 @@ def main() -> int:
             )
         guard = userdata[2] if isinstance(userdata, tuple) and len(userdata) > 2 else None
         if isinstance(guard, DigiconSmlGuard):
-            # Wait for retained sml_mode, then challenge only if it was enabled.
+            # Wait for retained sml_mode, then challenge if enabled or watch boot-abort.
             threading.Timer(
                 1.0, guard.maybe_start_challenge, args=("bridge-start",)
             ).start()

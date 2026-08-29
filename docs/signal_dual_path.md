@@ -33,7 +33,7 @@ Do **not** add `UID_OFFSET_SIGNALS` again on status publish (that produced MQTT 
 
 ## Digicon SML mode guard (`serial_to_mqtt.py`)
 
-Retained **`track/bridge/sml_mode`**: `enabled` | `disabling` | `disabled` | `query`.
+Retained **`track/bridge/sml_mode`**: `enabled` | `enabled_on_boot` | `aborting` | `aborted` | `disabling` | `disabled` | `query`.
 
 | Event | Bridge action |
 |-------|----------------|
@@ -41,10 +41,12 @@ Retained **`track/bridge/sml_mode`**: `enabled` | `disabling` | `disabled` | `qu
 | Digicon JMRI (SML Enabled) replies `enabled` | Cancel — leave field alone |
 | No ACK (was enabled, controller gone) | Retain **`disabling`**, wait ~3s (late Digicon `enabled` aborts); else **one** serial Red → hold → Unheld for `DIGICON_PACKED_HEADS`, mirrored on MQTT as `track/signalhead/<packed>` **Red** then **Unheld** → retain `disabled` |
 | Digicon sees `disabling` while Enabled | Replies `enabled` so bridge suspends RELEASE |
+| Digicon dests stored Enabled | JMRI publishes **`enabled_on_boot`**. Every Digicon agent publishes **`aborting`**, unchecks SML immediately (no Hold/Red/Unheld), then **`aborted`**. After ~3s the Digicon instance publishes **`enabled`** and continues |
+| `enabled_on_boot` / `aborting` / `aborted` | **Watch** ~12s for `enabled`. If it never arrives, same **query → disabling → Red/Unheld → disabled** challenge |
 | `sml_mode` already `disabled` / missing | **Skip** — no Red/Unheld storm |
 | Inbound `signalhead` during RELEASE | Dropped so a dying Digicon cannot stack extra Unhelds |
 
-JMRI Digicon script owns Enable→Disable `Unheld` and per-mast SML-off `Unheld`. Boot into Disabled does **not** RELEASE.
+JMRI Digicon script owns Enable→Disable `Unheld` and per-mast SML-off `Unheld`. Boot into Disabled does **not** RELEASE. Dirty-boot abort also does **not** RELEASE.
 
 ## Brick lamps (interim)
 
