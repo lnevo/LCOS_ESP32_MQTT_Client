@@ -17,9 +17,8 @@ lines, not from the heartbeat path.
 On MQTT connect we publish BRIDGE_STATUS_ONLINE to track/bridge/status (retained). On clean exit we
 publish BRIDGE_STATUS_OFFLINE (best-effort before disconnect).
 
-Sync watch (default on): USB PING, turnout ACK-miss streak, SerialException, and Nano boot
-banners trigger COM reopen and/or serial RESUBSCRIBE (LCOS event 125). See
-docs/signal_sync_recovery.md (--no-sync-watch to disable).
+Host -> bridge ops (not retained): payload RESUBSCRIBE | REOPEN | PING on
+track/bridge/cmd.
 
 Digicon SML guard (track/bridge/sml_mode): on bridge start (and JMRI track/state
 OFFLINE), only if retained/last sml_mode is **enabled**, publish "query". A live Digicon
@@ -114,6 +113,8 @@ SYNC_EXPECT_SUBSCRIPTION_ACCEPTS = 6  # display nodes 1,2,3,4,12,13
 BRIDGE_STATUS_TOPIC = "track/bridge/status"
 BRIDGE_STATUS_ONLINE = "online"
 BRIDGE_STATUS_OFFLINE = "offline"
+# Host -> bridge ops (not retained): RESUBSCRIBE | PING
+BRIDGE_CMD_TOPIC = "track/bridge/cmd"
 
 # JMRI -> bridge -> serial -> LCOS (distinct from state topic track/turnout/<packed>).
 CMD_TURNOUT_TOPIC = "track/cmd/turnout"
@@ -891,6 +892,7 @@ def main() -> int:
         _subscribe_line(_client, CMD_TURNOUT_SUBSCRIBE, qos=1)
         _subscribe_line(_client, SML_MODE_TOPIC, qos=1)
         _subscribe_line(_client, JMRI_STATE_TOPIC, qos=1)
+        _subscribe_line(_client, BRIDGE_CMD_TOPIC, qos=1)
         # signalmast first (live roster, including retain), then signalhead SET/Unheld.
         _subscribe_line(_client, SIGNALMAST_SUBSCRIBE, qos=1)
         if signalhead_on:
@@ -910,6 +912,25 @@ def main() -> int:
 
     def on_message(_client, userdata, msg):
         ping_q, cmd_q, guard = userdata
+        if msg.topic == BRIDGE_CMD_TOPIC:
+            if bool(getattr(msg, "retain", False)):
+                return
+            try:
+                body = msg.payload.decode("utf-8", errors="replace").strip().upper()
+            except Exception:
+                return
+            if body == "RESUBSCRIBE":
+                sync_watch.request_resubscribe("mqtt-bridge-cmd")
+                print("sync: MQTT track/bridge/cmd RESUBSCRIBE queued")
+            elif body == "PING":
+                try:
+                    cmd_q.put_nowait(USB_PING_SERIAL_LINE)
+                except queue.Full:
+                    pass
+            elif body == "REOPEN":
+                sync_watch.request_reopen("mqtt-bridge-cmd")
+                print("sync: MQTT track/bridge/cmd REOPEN queued")
+            return
         if heartbeat_on and msg.topic == HEARTBEAT_MQTT_TOPIC:
             if not args.restore and bool(getattr(msg, "retain", False)):
                 return
@@ -1352,6 +1373,15 @@ def main() -> int:
                         break
                     if line_out is SML_GUARD_RELEASE:
                         _run_sml_guard_release()
+                        continue
+                    if line_out == USB_PING_SERIAL_LINE:
+                        try:
+                            ser.write(USB_PING_SERIAL_LINE)
+                            ser.flush()
+                            if args.verbose:
+                                print("sync USB PING -> serial (mqtt cmd)")
+                        except serial.SerialException as exc:
+                            sync_watch.note_serial_exception(exc)
                         continue
                     _write_serial_cmd(line_out)
 
