@@ -17,6 +17,10 @@ lines, not from the heartbeat path.
 On MQTT connect we publish BRIDGE_STATUS_ONLINE to track/bridge/status (retained). On clean exit we
 publish BRIDGE_STATUS_OFFLINE (best-effort before disconnect).
 
+Sync watch (default on): USB PING, turnout ACK-miss streak, SerialException, and Nano boot
+banners trigger COM reopen and/or serial RESUBSCRIBE (LCOS event 125). See
+docs/signal_sync_recovery.md (--no-sync-watch to disable).
+
 Digicon SML guard (track/bridge/sml_mode): on bridge start (and JMRI track/state
 OFFLINE), only if retained/last sml_mode is **enabled**, publish "query". A live Digicon
 with SML Enabled replies "enabled". If no reply within SML_MODE_QUERY_TIMEOUT_SEC, publish
