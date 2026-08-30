@@ -109,6 +109,8 @@ SYNC_USB_PING_INTERVAL_SEC = 12.0
 SYNC_RESUBSCRIBE_COOLDOWN_SEC = 45.0
 SYNC_REOPEN_COOLDOWN_SEC = 20.0
 SYNC_EXPECT_SUBSCRIPTION_ACCEPTS = 6  # display nodes 1,2,3,4,12,13
+# After Nano boot/setup(), wait before deciding subscriptions are thin (avoid double RESUBSCRIBE).
+SYNC_BOOT_ACCEPT_GRACE_SEC = 8.0
 
 # Host bridge presence: same topic for startup and shutdown (retained; QoS 1).
 BRIDGE_STATUS_TOPIC = "track/bridge/status"
@@ -542,9 +544,9 @@ class SerialSyncWatchdog:
     """Detect Nano/USB desync and request recovery (reopen COM and/or RESUBSCRIBE).
 
     Layers (cheapest first):
-      1) USB PING -> ACK PING  (serial path alive)
+      1) USB PING -> ACK PING  (serial path alive; quiet unless miss)
       2) Turnout cmd ACK miss streak  (Nano not echoing text)
-      3) Nano boot banner on serial  (reset while handle still open)
+      3) Nano boot banner  (arm thin-accept check; setup() already subscribed)
       4) SerialException  (COM stolen / USB drop) -> reopen
       5) RESUBSCRIBE text  (re-emit event 125 without USB reset)
 
@@ -560,6 +562,8 @@ class SerialSyncWatchdog:
         ping_interval_sec: float = SYNC_USB_PING_INTERVAL_SEC,
         resubscribe_cooldown_sec: float = SYNC_RESUBSCRIBE_COOLDOWN_SEC,
         reopen_cooldown_sec: float = SYNC_REOPEN_COOLDOWN_SEC,
+        boot_accept_grace_sec: float = SYNC_BOOT_ACCEPT_GRACE_SEC,
+        expect_subscription_accepts: int = SYNC_EXPECT_SUBSCRIPTION_ACCEPTS,
         verbose: bool = False,
     ) -> None:
         self.enabled = enabled
@@ -567,14 +571,19 @@ class SerialSyncWatchdog:
         self.ping_interval_sec = ping_interval_sec
         self.resubscribe_cooldown_sec = resubscribe_cooldown_sec
         self.reopen_cooldown_sec = reopen_cooldown_sec
+        self.boot_accept_grace_sec = boot_accept_grace_sec
+        self.expect_subscription_accepts = expect_subscription_accepts
         self.verbose = verbose
         self._lock = threading.Lock()
         self._ack_fails = 0
-        self._last_ping_mono = 0.0
+        # Defer first ping a full interval so boot serial traffic is not a false miss.
+        self._last_ping_mono = time.monotonic()
         self._last_resubscribe_mono = 0.0
         self._last_reopen_mono = 0.0
         self._awaiting_ping_ack = False
         self._subscription_accepts = 0
+        self._boot_verify_deadline = 0.0
+        self._boot_verify_reason = ""
         self._want_reopen = False
         self._want_resubscribe = False
         self._reopen_reason = ""
@@ -597,6 +606,40 @@ class SerialSyncWatchdog:
             self.request_reopen(f"ack-miss-{fails}")
             self.request_resubscribe(f"ack-miss-{fails}")
 
+    def arm_boot_subscription_verify(self, reason: str) -> None:
+        """Wait for setup() accepts; RESUBSCRIBE only if still thin after grace."""
+        if not self.enabled:
+            return
+        with self._lock:
+            now = time.monotonic()
+            # Multiple boot banner lines arrive; only zero accepts on first arm.
+            if self._boot_verify_deadline <= 0.0:
+                self._subscription_accepts = 0
+                self._boot_verify_reason = reason
+            self._boot_verify_deadline = now + self.boot_accept_grace_sec
+
+    def maybe_finish_boot_subscription_verify(self) -> None:
+        if not self.enabled:
+            return
+        with self._lock:
+            deadline = self._boot_verify_deadline
+            if deadline <= 0.0 or time.monotonic() < deadline:
+                return
+            accepts = self._subscription_accepts
+            reason = self._boot_verify_reason or "boot-thin-accepts"
+            self._boot_verify_deadline = 0.0
+            self._boot_verify_reason = ""
+        expected = self.expect_subscription_accepts
+        if accepts >= expected:
+            if self.verbose:
+                print(f"sync: boot subscriptions ok ({accepts}/{expected})")
+            return
+        print(
+            f"sync: boot subscriptions thin ({accepts}/{expected}) -> RESUBSCRIBE",
+            file=sys.stderr,
+        )
+        self.request_resubscribe(reason)
+
     def note_serial_line(self, stripped: str) -> None:
         if not self.enabled:
             return
@@ -617,16 +660,14 @@ class SerialSyncWatchdog:
             self.request_resubscribe("subscription-declined")
             return
         # Nano reboot banner while the host still holds the COM handle.
+        # setup() already emits event-125; do not RESUBSCRIBE immediately (that doubles).
         if (
             stripped.startswith("LCOS Integration Library")
             or stripped.startswith("LCOS MQTT bridge")
             or stripped.startswith("@<0")
         ):
             print(f"sync: Nano boot marker seen: {stripped!r}", file=sys.stderr)
-            with self._lock:
-                self._subscription_accepts = 0
-            # setup() already re-subscribes; give accepts time, then RESUBSCRIBE if thin.
-            self.request_resubscribe("nano-boot-banner")
+            self.arm_boot_subscription_verify("nano-boot-thin")
 
     def note_serial_exception(self, exc: BaseException) -> None:
         print(f"sync: serial exception -> reopen ({exc})", file=sys.stderr)
@@ -754,9 +795,9 @@ def _handle_serial_text_line(
             print(stripped)
         return
 
-    # ACK … from Nano (command echo). Visible with --verbose; not an MQTT publish.
+    # ACK … from Nano (command echo). Visible with --verbose; USB PING stays quiet.
     if stripped.startswith("ACK "):
-        if verbose:
+        if verbose and not stripped.startswith("ACK PING"):
             print(stripped)
         _publish_heartbeat_ack_if_present(
             client, stripped, heartbeat_on=heartbeat_on, verbose=verbose
@@ -1361,8 +1402,11 @@ def main() -> int:
                     if not _reopen_serial(reopen_reason):
                         time.sleep(2.0)
                         continue
-                    sync_watch.request_resubscribe(f"after-reopen:{reopen_reason}")
+                    # DTR reset runs setup(); boot markers arm thin-accept verify.
+                    # Do not RESUBSCRIBE here — that doubles event-125 with setup().
+                    sync_watch.arm_boot_subscription_verify(f"after-reopen:{reopen_reason}")
 
+                sync_watch.maybe_finish_boot_subscription_verify()
                 resub_reason = sync_watch.take_resubscribe_request()
                 if resub_reason is not None:
                     _send_resubscribe(resub_reason)
@@ -1379,8 +1423,6 @@ def main() -> int:
                         try:
                             ser.write(USB_PING_SERIAL_LINE)
                             ser.flush()
-                            if args.verbose:
-                                print("sync USB PING -> serial (mqtt cmd)")
                         except serial.SerialException as exc:
                             sync_watch.note_serial_exception(exc)
                         continue
@@ -1393,22 +1435,16 @@ def main() -> int:
                         break
                     ser.write(HEARTBEAT_SERIAL_LINE)
                     ser.flush()
-                    if args.verbose:
-                        print(f"MQTT -> serial {HEARTBEAT_SERIAL_LINE!r}")
 
                 now = time.monotonic()
                 if heartbeat_on and (now - last_heartbeat) >= HEARTBEAT_INTERVAL_SEC:
                     ser.write(HEARTBEAT_SERIAL_LINE)
                     ser.flush()
                     last_heartbeat = now
-                    if args.verbose:
-                        print(f"HB -> serial {HEARTBEAT_SERIAL_LINE!r}")
                 elif sync_watch.maybe_queue_usb_ping():
                     try:
                         ser.write(USB_PING_SERIAL_LINE)
                         ser.flush()
-                        if args.verbose:
-                            print("sync USB PING -> serial")
                     except serial.SerialException as exc:
                         sync_watch.note_serial_exception(exc)
 

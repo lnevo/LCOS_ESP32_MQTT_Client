@@ -26,10 +26,10 @@ Nano resets. The Python process often keeps a dead handle until reopen.
 
 ## Host recovery (`serial_to_mqtt.py`, `--sync-watch` default on)
 
-1. Periodic **USB `PING`** (12s). Missed `ACK PING` counts toward fail streak.
+1. Periodic **USB `PING`** (12s). Quiet unless miss; missed `ACK PING` counts toward fail streak.
 2. Turnout **ACK miss** streak (≥3) → request **reopen COM** + **`RESUBSCRIBE`**.
 3. **SerialException** → reopen COM (DTR usually re-runs Nano `setup()` subscriptions).
-4. Nano **boot banner** on serial (`LCOS Integration Library…`, `@<0…>`) → `RESUBSCRIBE`.
+4. Nano **boot banner** → wait for `setup()` accepts; **`RESUBSCRIBE` only if thin** (avoids double).
 5. Cooldowns avoid recovery storms.
 
 Disable with `--no-sync-watch`.
