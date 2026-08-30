@@ -215,10 +215,10 @@ static void handleSignalHeadCmdFromSerialLine(lcos_layout *layout, const char *r
 /* JMRI display nodes (decimal digit string of RF24 octal addr). Mapped via mqttDisplayNodeToLcosNode. */
 static const uint16_t kSubscribeDisplayNodes[] = { 1, 2, 3, 4, 12, 13 };
 
-// --- Serial text: heartbeat from Python (serial_to_mqtt.py) ---
+// --- Serial text from Python (serial_to_mqtt.py) ---
 // Turnout line "track/cmd/turnout/<packed> ..." uses jmriNode*100+uid; mqttDisplayNodeToLcosNode() before sendShortMessage.
 // Turnout index 0 => UID UID_OFFSET_TURNOUTS+0 (8). Replies on MQTT use pkt.source_node from the wire, not dest.
-#define HB_SERIAL_TOKEN "PING"
+// Any non-empty text line gets "ACK <line>" first. PING is USB health only (no turnout / no radio).
 #define RESUBSCRIBE_TOKEN "RESUBSCRIBE"
 
 static char s_serialLineBuf[128];
