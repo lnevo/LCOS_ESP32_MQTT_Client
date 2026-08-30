@@ -263,6 +263,7 @@ static void pollSerialTextLineForAck(lcos_layout *layout) {
           Serial.println(F("RESUBSCRIBE start"));
           mqtt_bridge_setup_subscriptions(layout, layout->getNetworkObject()->getNodeID());
           Serial.println(F("RESUBSCRIBE sent"));
+        }
         /* PING / unknown text: ACK already printed — no radio / no turnout. */
       }
       s_serialLineLen = 0;
