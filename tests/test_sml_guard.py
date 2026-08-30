@@ -34,6 +34,10 @@ if "paho" not in sys.modules:
 from serial_to_mqtt import (
     DigiconSmlGuard,
     SML_GUARD_RELEASE,
+    SML_MODE_BOOT_ABORT_TIMEOUT_SEC,
+    SML_MODE_DISABLING_WAIT_SEC,
+    SML_MODE_QUERY_TIMEOUT_SEC,
+    SML_MODE_RED_HOLD_SEC,
     packed_is_lcos_signal,
 )
 
@@ -53,6 +57,12 @@ class _FakeClient:
 
 
 class DigiconSmlGuardTest(unittest.TestCase):
+    def test_sml_mode_timing_defaults(self) -> None:
+        self.assertEqual(SML_MODE_QUERY_TIMEOUT_SEC, 1.0)
+        self.assertEqual(SML_MODE_DISABLING_WAIT_SEC, 1.0)
+        self.assertEqual(SML_MODE_RED_HOLD_SEC, 3.0)
+        self.assertEqual(SML_MODE_BOOT_ABORT_TIMEOUT_SEC, 5.0)
+
     def test_default_packed_heads_empty(self) -> None:
         guard = DigiconSmlGuard(_FakeClient(), queue.Queue(), verbose=False)
         self.assertEqual(guard.packed_heads, ())

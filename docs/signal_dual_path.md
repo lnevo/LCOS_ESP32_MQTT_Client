@@ -37,12 +37,12 @@ Retained **`track/bridge/sml_mode`**: `enabled` | `enabling` | `aborting` | `abo
 
 | Event | Bridge action |
 |-------|----------------|
-| Bridge start / live `track/state` **OFFLINE** | Read last `sml_mode`. **Only if `enabled`**, publish `query` and wait ~5s. Extra OFFLINE while in flight is ignored |
-| Digicon JMRI (SML Enabled) replies `enabled` | Cancel — leave field alone |
-| No ACK (was enabled, controller gone) | Retain **`disabling`**, wait ~3s (late Digicon `enabled` aborts); else **one** serial Red → hold → Unheld for the live `signalmast` roster, mirrored on MQTT as `track/signalhead/<packed>` **Red** then **Unheld** → retain `disabled` |
-| Digicon sees `disabling` while Enabled | Replies `enabled` so bridge suspends RELEASE |
-| Digicon dests stored Enabled, or operator **Force override** | That JMRI instance publishes **`enabling`** and does **not** abort. **Other** Digicon agents publish **`aborting`**, uncheck immediately (no Hold/Red/Unheld), then **`aborted`**. After ~3s the originator publishes **`enabled`**. Solo has nobody to abort. |
-| `enabling` / `aborting` / `aborted` | **Watch** ~12s for `enabled`. If it never arrives, same **query → disabling → Red/Unheld → disabled** challenge |
+| Bridge start / live `track/state` **OFFLINE** | Read last `sml_mode`. **Only if `enabled`**, publish `query` and wait ~1s. Extra OFFLINE while in flight is ignored |
+| Digicon JMRI (SML Enabled, or taking / Hold) | Replies `enabled` — cancel, leave field alone |
+| No ACK (was enabled, controller gone) | Retain **`disabling`**, wait ~1s (late Digicon `enabled` aborts); else **one** serial Red → hold 3s → Unheld for the live `signalmast` roster, mirrored on MQTT as `track/signalhead/<packed>` **Red** then **Unheld** → retain `disabled` |
+| Digicon sees `disabling` while owning or taking Digicon | Replies `enabled` so bridge suspends RELEASE |
+| Digicon dests stored Enabled, or operator **Force override** | That JMRI instance publishes **`enabling`** and does **not** abort. **Other** Digicon agents publish **`aborting`**, uncheck immediately (no Hold/Red/Unheld), then **`aborted`**. After ~1s the originator Holds 3s then publishes **`enabled`**. Solo has nobody to abort. |
+| `enabling` / `aborting` / `aborted` | **Watch** ~5s for `enabled`. If it never arrives, same **query → disabling → Red/Unheld → disabled** challenge |
 | `sml_mode` already `disabled` / missing | **Skip** — no Red/Unheld storm |
 | Inbound `signalhead` during RELEASE | Dropped so a dying Digicon cannot stack extra Unhelds |
 

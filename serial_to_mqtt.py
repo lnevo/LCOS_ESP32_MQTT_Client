@@ -129,12 +129,12 @@ LCOS_SIGNAL_UID_MIN = 32
 LCOS_SIGNAL_UID_MAX = 47
 SML_MODE_TOPIC = "track/bridge/sml_mode"
 JMRI_STATE_TOPIC = "track/state"
-SML_MODE_QUERY_TIMEOUT_SEC = 5.0
+SML_MODE_QUERY_TIMEOUT_SEC = 1.0
 # After query timeout: announce disabling, wait for a late Digicon enabled ACK, then RELEASE.
-SML_MODE_DISABLING_WAIT_SEC = 3.0
+SML_MODE_DISABLING_WAIT_SEC = 1.0
 SML_MODE_RED_HOLD_SEC = 3.0
-# enabling → aborting → aborted → enabled (publisher ~3s + Hold ~3s). Then challenge.
-SML_MODE_BOOT_ABORT_TIMEOUT_SEC = 12.0
+# enabling (1s) → aborting → Hold 3s → enabled. Then challenge if that never arrives.
+SML_MODE_BOOT_ABORT_TIMEOUT_SEC = 5.0
 _SML_BOOT_ABORT_MODES = ("enabling", "aborting", "aborted")
 # Pace Digicon bulk Red/Unheld on USB serial (seconds between lines).
 SML_MODE_SERIAL_GAP_SEC = 0.05
@@ -963,6 +963,7 @@ def main() -> int:
     last_heartbeat = time.monotonic()
     # Turnout cmds: wait briefly for Nano ACK (USB RX was garbled without pacing).
     # Signalhead cmds: no ACK expected — pace with a short gap only.
+    # TODO: revisit serial ACK/pacing speeds (turnout 0.35s, signalhead 50ms).
     _ACK_WAIT_SEC = 0.35
     _SIGNALHEAD_GAP_SEC = SML_MODE_SERIAL_GAP_SEC
 
