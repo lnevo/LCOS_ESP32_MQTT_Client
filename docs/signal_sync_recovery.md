@@ -20,8 +20,10 @@ Nano resets. The Python process often keeps a dead handle until reopen.
 | Probe | Serial line | Proves |
 |-------|-------------|--------|
 | USB ping | `PING` | Nano text stack alive (`ACK PING`) — **no radio, no turnout** |
-| Resubscribe | `RESUBSCRIBE` | Re-emits event 125 to display nodes 1,2,3,4,12,13; watch `Subscription accepted - node: …` |
-| Turnout GET | `track/cmd/turnout/<packed> GET` | Field should publish `EVENT_TURNOUT` → MQTT `track/turnout/…` |
+| Resubscribe | `RESUBSCRIBE` | Re-emits event 125 to display nodes **0**,1,2,3,4,12,13; watch `Subscription accepted - node: …` |
+| Turnout GET | `track/cmd/turnout/<packed> GET` | Field answers turnout **index** 0–7 on the wire; Digicon packs **UID 8–15** (`408`). Bridge maps both ways. |
+| Signal aspect GET | `track/signalhead/<packed> Get` | Field should publish `EVENT_SIGNAL` → MQTT `track/signalmast/…` (master Signal 0 = `32`) |
+| Track power status | `track/cmd/power/<district> GET` | MASTER should publish `EVENT_TRACK_POWER` → MQTT `track/power/<district>` |
 | Live Digicon throw | MQTT `track/cmd/turnout/<packed> THROWN` | Full path: MQTT→USB→radio→status |
 
 ## Host recovery (`serial_to_mqtt.py`, `--sync-watch` default on)
@@ -65,7 +67,7 @@ Windows `DETACHED_PROCESS` so the bridge can outlive the SSH command.
 
 | Check | Result |
 |-------|--------|
-| Boot banner → `RESUBSCRIBE` | Nodes 1,2,3,4,12,13 `Subscription accepted` (×2 with setup()) |
+| Boot banner → thin-accept check | Nodes **0**,1,2,3,4,12,13 → expect **7** accepts (`SYNC_SUBSCRIBE_DISPLAY_NODES`) |
 | `track/bridge/cmd` `PING` | `ACK PING` |
 | GET `408`/`411`/`1208`/`108` | Serial `ACK`, **no** MQTT status |
 | GET `100` | Serial `ACK` + `track/turnout/100 CLOSED` |
@@ -74,3 +76,21 @@ Windows `DETACHED_PROCESS` so the bridge can outlive the SSH command.
 Gap: master reboot that leaves USB ACK working will **not** trip the current
 watchdog. Need a follow-up rule: after turnout ACK, expect `track/turnout/…`
 status within N seconds → else `RESUBSCRIBE`.
+
+## Master status GET probe (2026-08-30)
+
+Firmware now: subscribe display node **0**, `track/cmd/power/<district> GET`,
+signalhead `Get` without Digicon roster. One-shot:
+`python -u scripts\windows\probe_master_status_oneshot.py`
+
+| Check | Serial ACK | MQTT status |
+|-------|------------|-------------|
+| GET turnout `100` (control) | yes | `track/turnout/100 CLOSED` |
+| GET signal master `32` | yes | **none** |
+| GET signal node4 `432` | yes | **none** |
+| GET track power district `0` | yes | **none** |
+
+Subscription accepted for node **0**. Conclusion: command path to MASTER works;
+field did **not** publish `EVENT_SIGNAL` / `EVENT_TRACK_POWER` for these GETs
+(likely no Signal / Track Power object answering on MASTER, and Digicon Signal 0
+also silent on aspect GET). Not usable yet as a sync-recovery heartbeat.

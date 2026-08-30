@@ -108,7 +108,9 @@ SYNC_ACK_FAIL_LIMIT = 3
 SYNC_USB_PING_INTERVAL_SEC = 12.0
 SYNC_RESUBSCRIBE_COOLDOWN_SEC = 45.0
 SYNC_REOPEN_COOLDOWN_SEC = 20.0
-SYNC_EXPECT_SUBSCRIPTION_ACCEPTS = 6  # display nodes 1,2,3,4,12,13
+# Must match kSubscribeDisplayNodes[] in lcos_mqtt_bridge.cpp (display / JMRI digit nodes).
+SYNC_SUBSCRIBE_DISPLAY_NODES = (0, 1, 2, 3, 4, 12, 13)
+SYNC_EXPECT_SUBSCRIPTION_ACCEPTS = len(SYNC_SUBSCRIBE_DISPLAY_NODES)
 # After Nano boot/setup(), wait before deciding subscriptions are thin (avoid double RESUBSCRIBE).
 SYNC_BOOT_ACCEPT_GRACE_SEC = 8.0
 
@@ -130,6 +132,14 @@ _TURNOUT_STATE_RE = re.compile(
 # Legacy: single topic track/cmd/turnout, payload "408 THROWN".
 _TURNOUT_FLAT_PAYLOAD_RE = re.compile(
     r"^\d+\s+(THROWN|CLOSED|TOGGLE|ON|OFF|GET|QUERY)\s*$", re.IGNORECASE
+)
+
+# Track power CMD (Public API EVENT_TRACK_PWR_CMD): district 0–127 on MASTER.
+CMD_POWER_TOPIC = "track/cmd/power"
+CMD_POWER_SUBSCRIBE = "track/cmd/power/#"
+_POWER_HIER_TOPIC_RE = re.compile(r"^track/cmd/power/(\d+)$")
+_POWER_STATE_RE = re.compile(
+    r"^(GET|QUERY|ON|OFF|NORMAL|REVERSE|REVERSED|RELEASE)\s*$", re.IGNORECASE
 )
 
 # Digicon / JMRI Virtual heads → LCOS SIGNAL_CMD (set-only on firmware). On by default.
@@ -932,6 +942,7 @@ def main() -> int:
         if heartbeat_on:
             _subscribe_line(_client, HEARTBEAT_MQTT_TOPIC, qos=1)
         _subscribe_line(_client, CMD_TURNOUT_SUBSCRIBE, qos=1)
+        _subscribe_line(_client, CMD_POWER_SUBSCRIBE, qos=1)
         _subscribe_line(_client, SML_MODE_TOPIC, qos=1)
         _subscribe_line(_client, JMRI_STATE_TOPIC, qos=1)
         _subscribe_line(_client, BRIDGE_CMD_TOPIC, qos=1)
@@ -1077,8 +1088,18 @@ def main() -> int:
                     )
                 return
             packed = signal_m.group(1)
-            if not packed_is_lcos_signal(packed) or not (
-                isinstance(guard, DigiconSmlGuard) and guard.has_packed(packed)
+            # GET/QUERY may probe any signal UID without Digicon roster enroll.
+            # MASTER (display node 0 → packed 32–47) is not Digicon-rostered; allow SET too.
+            is_probe = body.lower() in ("get", "query")
+            is_master_signal = (
+                packed_mqtt_lcos_node_validation_error(packed) is None
+                and int(packed, 10) // 100 == 0
+                and packed_is_lcos_signal(packed)
+            )
+            if not packed_is_lcos_signal(packed) or (
+                not is_probe
+                and not is_master_signal
+                and not (isinstance(guard, DigiconSmlGuard) and guard.has_packed(packed))
             ):
                 if args.verbose:
                     print(
@@ -1099,6 +1120,42 @@ def main() -> int:
             if args.verbose:
                 print(
                     f"MQTT signalhead ignored (need packed digits): {msg.topic!r}",
+                    file=sys.stderr,
+                )
+            return
+
+        # --- track power ---
+        power_m = _POWER_HIER_TOPIC_RE.match(msg.topic)
+        if power_m is not None:
+            if not args.restore and bool(getattr(msg, "retain", False)):
+                return
+            try:
+                body = msg.payload.decode("utf-8", errors="replace").strip()
+            except Exception as e:
+                if args.verbose:
+                    print(f"MQTT power cmd: UTF-8 decode failed: {e}", file=sys.stderr)
+                return
+            if not _POWER_STATE_RE.match(body):
+                if args.verbose:
+                    print(
+                        "MQTT power cmd rejected: expected GET/ON/OFF/NORMAL/REVERSE/RELEASE; "
+                        f"decoded={body!r}"
+                    )
+                return
+            district = power_m.group(1)
+            if int(district, 10) > 127:
+                if args.verbose:
+                    print(f"MQTT power cmd rejected: district {district!r} > 127")
+                return
+            if args.verbose:
+                print(f"MQTT RX power cmd topic={msg.topic!r} body={body!r}")
+            line = f"{CMD_POWER_TOPIC}/{district} {body}\n".encode("utf-8")
+            _queue_serial_cmd(cmd_q, line, label="power")
+            return
+        if msg.topic.startswith(f"{CMD_POWER_TOPIC}/"):
+            if args.verbose:
+                print(
+                    f"MQTT power cmd ignored (need district digits): {msg.topic!r}",
                     file=sys.stderr,
                 )
             return

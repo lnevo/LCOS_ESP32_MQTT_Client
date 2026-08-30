@@ -61,7 +61,14 @@ const char *sensorStateToPayload(byte data1) {
 }
 
 const char *powerStateToPayload(byte data1) {
-  return data1 == 0 ? "OFF" : "ON";
+  /* Public API track power: 0=off, 1=normal, 2=reversed. JMRI MQTT uses OFF/ON. */
+  if (data1 == 0) {
+    return "OFF";
+  }
+  if (data1 == 2) {
+    return "REVERSE";
+  }
+  return "ON";
 }
 
 // --- Signal mast (EVENT_SIGNAL 0x3 status, EVENT_SIGNAL_CMD 0x11 command.)
@@ -132,7 +139,7 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
   byte data1 = pkt->data1;
   byte data2 = pkt->data2;
 
-  if (debug && (event == EVENT_TURNOUT || event == EVENT_TURNOUT_CMD || event == EVENT_SIGNAL || event == EVENT_SIGNAL_CMD || event == EVENT_BLOCK || event == EVENT_BLOCK_CMD || event == EVENT_BUTTON || event == EVENT_SWITCH_CONTACT || event == EVENT_CONTROL_CMD)) {
+  if (debug && (event == EVENT_TURNOUT || event == EVENT_TURNOUT_CMD || event == EVENT_SIGNAL || event == EVENT_SIGNAL_CMD || event == EVENT_BLOCK || event == EVENT_BLOCK_CMD || event == EVENT_BUTTON || event == EVENT_SWITCH_CONTACT || event == EVENT_CONTROL_CMD || event == EVENT_TRACK_POWER || event == EVENT_TRACK_PWR_CMD)) {
     debugOperationPayload(out, event, node, pkt->from_node, pkt->to_node, uid, data1, data2,
       pkt->data3, pkt->data4, pkt->data5, pkt->data6, pkt->cmd_response);
   }
@@ -147,8 +154,12 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
       /* Status (EVENT_TURNOUT) is authoritative for JMRI; CMD frames often carry non-UID data0 (e.g. 0x7F). */
       return;
     case EVENT_TURNOUT:
+      /* Field status data0 is turnout *index* 0–7; JMRI Digicon expects UID 8–15 (408 not 400). */
       prefix = MQTT_TOPIC_TURNOUT;
       payload = turnoutStateToPayload(data1);
+      if (uid < (byte)UID_OFFSET_TURNOUTS) {
+        topic_uid = (byte)(uid + (byte)UID_OFFSET_TURNOUTS);
+      }
       break;
     case EVENT_SIGNAL_CMD:
       /* Status (EVENT_SIGNAL) is authoritative; CMD frames often carry non-UID data0 (e.g. 0x7F)
@@ -162,6 +173,20 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
       break;
     case EVENT_CONTROL_CMD:
       /* Do not MQTT-publish control CMDs; optional status echo is printed by the bridge after send. */
+      return;
+    case EVENT_TRACK_PWR_CMD:
+      /* Status (EVENT_TRACK_POWER) is authoritative. */
+      return;
+    case EVENT_TRACK_POWER:
+      /* Public API: data0 = district ID; data1 = 0 off / 1 normal / 2 reversed.
+       * Publish track/power/<district> (source node not packed — power is district-scoped). */
+      payload = powerStateToPayload(data1);
+      {
+        int n = snprintf(topic, sizeof(topic), "%s/%u", MQTT_TOPIC_POWER, (unsigned)uid);
+        if (n > 0 && (size_t)n < sizeof(topic) && payload) {
+          mqttPublish(out, topic, payload);
+        }
+      }
       return;
     case EVENT_BLOCK:
     case EVENT_BLOCK_CMD:

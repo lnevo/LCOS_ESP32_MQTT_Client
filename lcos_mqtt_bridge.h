@@ -91,6 +91,16 @@ class gateway;
 #define LCOS_CONTROL_CMD_DO_OPTION    0x03
 #define LCOS_RELAY_OPTION_OFF         0
 #define LCOS_RELAY_OPTION_ON          1
+/*
+ * Track power (EVENT_TRACK_PWR_CMD 0x15). Public API: data0 = district 0–127;
+ * data1 1=status request, 2=set state, 0x7F=RELEASE; data2 0=off, 1=normal, 2=reversed.
+ */
+#define LCOS_TRACK_PWR_CMD_GET        0x01
+#define LCOS_TRACK_PWR_CMD_SET        0x02
+#define LCOS_TRACK_PWR_CMD_RELEASE    0x7F
+#define LCOS_TRACK_PWR_OFF            0
+#define LCOS_TRACK_PWR_NORMAL         1
+#define LCOS_TRACK_PWR_REVERSED       2
 
 /* After IH SIGNAL_CMD set, also emit track/signalmast/<packed> aspect report (JMRI receive path).
  * 1 = default on; set 0 to rely only on field EVENT_SIGNAL status frames. */
@@ -101,7 +111,7 @@ class gateway;
 #define MQTT_BRIDGE_SYS_ID "LCOS MQTT bridge (JMRI) — IH set + signalmast status"
 
 /**
- * LCOS radio subscriptions (event 125) for display nodes 1,2,3,4,12,13.
+ * LCOS radio subscriptions (event 125) for display nodes 0,1,2,3,4,12,13.
  * Called from setup() and again when the host sends serial text "RESUBSCRIBE".
  */
 void mqtt_bridge_setup_subscriptions(lcos_layout *layout, uint16_t sourceNode);
