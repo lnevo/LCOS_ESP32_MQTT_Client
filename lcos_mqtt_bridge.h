@@ -100,6 +100,10 @@ class gateway;
 
 #define MQTT_BRIDGE_SYS_ID "LCOS MQTT bridge (JMRI) — IH set + signalmast status"
 
+/**
+ * LCOS radio subscriptions (event 125) for display nodes 1,2,3,4,12,13.
+ * Called from setup() and again when the host sends serial text "RESUBSCRIBE".
+ */
 void mqtt_bridge_setup_subscriptions(lcos_layout *layout, uint16_t sourceNode);
 void mqtt_bridge_poll_serial(lcos_layout *layout, LCMNetwork *net, gateway *serial_gw);
 void mqtt_bridge_print_subscription_result(const DATAGRAM *pkt);

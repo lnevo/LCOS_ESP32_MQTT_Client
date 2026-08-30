@@ -92,6 +92,12 @@ static void handleTurnoutCmdFromSerialLine(lcos_layout *layout, const char *rest
     align = (byte)ALIGN_THROWN;
   } else if (streq_ci(end, "TOGGLE")) {
     align = (byte)ALIGN_TOGGLE;
+  } else if (streq_ci(end, "GET") || streq_ci(end, "QUERY")) {
+    /* Public API turnout CMD data1=1 GET — field should publish EVENT_TURNOUT status. */
+    layout->sendShortMessage(false, lcosNode, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
+      uid, LCOS_CMD_GET_STATE, 0, 0);
+    layout->update();
+    return;
   } else {
     return;
   }
@@ -213,6 +219,8 @@ static const uint16_t kSubscribeDisplayNodes[] = { 1, 2, 3, 4, 12, 13 };
 // Turnout line "track/cmd/turnout/<packed> ..." uses jmriNode*100+uid; mqttDisplayNodeToLcosNode() before sendShortMessage.
 // Turnout index 0 => UID UID_OFFSET_TURNOUTS+0 (8). Replies on MQTT use pkt.source_node from the wire, not dest.
 #define HB_SERIAL_TOKEN "PING"
+#define HB_RADIO_TOKEN "PING RADIO"
+#define RESUBSCRIBE_TOKEN "RESUBSCRIBE"
 #define HB_TURNOUT_NODE 3
 #define HB_TURNOUT_UID 8
 
@@ -253,13 +261,18 @@ static void pollSerialTextLineForAck(lcos_layout *layout) {
         } else if (layout != NULL && strncmp(s_serialLineBuf, SIGNALHEAD_PREFIX, SIGNALHEAD_PREFIX_LEN) == 0
             && s_serialLineBuf[SIGNALHEAD_PREFIX_LEN] != '\0') {
           handleSignalHeadCmdFromSerialLine(layout, s_serialLineBuf + SIGNALHEAD_PREFIX_LEN);
-        } else if (layout != NULL && strcmp(s_serialLineBuf, HB_SERIAL_TOKEN) == 0) {
-          /* Unicast to the turnout owner: multicast=true only sends to master (00) per LCMNetwork::emitEvent. */
-          /* Turnout CMD: data1 = command request, data2 = ALIGN_*; see lcos_mqtt_bridge.h / README LCOS API table. */
+        } else if (layout != NULL && strcmp(s_serialLineBuf, RESUBSCRIBE_TOKEN) == 0) {
+          /* Re-emit event 125 subscriptions (e.g. after MASTER reboot or lost distributor state). */
+          Serial.println(F("RESUBSCRIBE start"));
+          mqtt_bridge_setup_subscriptions(layout, layout->getNetworkObject()->getNodeID());
+          Serial.println(F("RESUBSCRIBE sent"));
+        } else if (layout != NULL && strcmp(s_serialLineBuf, HB_RADIO_TOKEN) == 0) {
+          /* Optional radio probe (debug heartbeat). Plain PING is USB ACK-only. */
           layout->sendShortMessage(false, HB_TURNOUT_NODE, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
             (byte)HB_TURNOUT_UID, LCOS_CMD_SET_STATE_NO_LOCK, (byte)ALIGN_THROWN, 0);
           layout->update();
         }
+        /* Plain "PING" and unknown text: ACK already printed — no radio traffic. */
       }
       s_serialLineLen = 0;
       /* Keep draining: Digicon often bursts several IH lines; one-per-call left them queued. */

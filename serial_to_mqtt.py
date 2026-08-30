@@ -89,10 +89,22 @@ DEFAULT_MQTT_PORT = 1883
 # Set True here, or pass --debug-heartbeat on the command line (either enables the feature).
 DEBUG_HEARTBEAT = False
 HEARTBEAT_INTERVAL_SEC = 10.0
-# Text line sent to serial (LF-terminated). Arduino must treat as text (not binary 0/1).
-HEARTBEAT_SERIAL_LINE = b"PING\n"
+# USB-only health (firmware ACKs; no radio). Sync watchdog uses this.
+USB_PING_SERIAL_LINE = b"PING\n"
+# Debug heartbeat radio probe (firmware also ACKs, then throws HB turnout).
+HEARTBEAT_SERIAL_LINE = b"PING RADIO\n"
+# Re-emit LCOS event-125 subscriptions on the Nano (after master loss / soft desync).
+RESUBSCRIBE_SERIAL_LINE = b"RESUBSCRIBE\n"
 # MQTT topic for the raw serial reply (e.g. "ACK PING").
 HEARTBEAT_MQTT_TOPIC = "track/bridge/heartbeat"
+
+# Sync recovery (USB ACK miss / serial death → reopen COM and/or RESUBSCRIBE).
+SYNC_WATCH_DEFAULT = True
+SYNC_ACK_FAIL_LIMIT = 3
+SYNC_USB_PING_INTERVAL_SEC = 12.0
+SYNC_RESUBSCRIBE_COOLDOWN_SEC = 45.0
+SYNC_REOPEN_COOLDOWN_SEC = 20.0
+SYNC_EXPECT_SUBSCRIPTION_ACCEPTS = 6  # display nodes 1,2,3,4,12,13
 
 # Host bridge presence: same topic for startup and shutdown (retained; QoS 1).
 BRIDGE_STATUS_TOPIC = "track/bridge/status"
@@ -104,9 +116,13 @@ CMD_TURNOUT_TOPIC = "track/cmd/turnout"
 # Wildcard subscription: receive track/cmd/turnout/408, payload THROWN|CLOSED|TOGGLE.
 CMD_TURNOUT_SUBSCRIBE = "track/cmd/turnout/#"
 _TURNOUT_HIER_TOPIC_RE = re.compile(r"^track/cmd/turnout/(\d+)$")
-_TURNOUT_STATE_RE = re.compile(r"^(THROWN|CLOSED|TOGGLE|ON|OFF)\s*$", re.IGNORECASE)
+_TURNOUT_STATE_RE = re.compile(
+    r"^(THROWN|CLOSED|TOGGLE|ON|OFF|GET|QUERY)\s*$", re.IGNORECASE
+)
 # Legacy: single topic track/cmd/turnout, payload "408 THROWN".
-_TURNOUT_FLAT_PAYLOAD_RE = re.compile(r"^\d+\s+(THROWN|CLOSED|TOGGLE|ON|OFF)\s*$", re.IGNORECASE)
+_TURNOUT_FLAT_PAYLOAD_RE = re.compile(
+    r"^\d+\s+(THROWN|CLOSED|TOGGLE|ON|OFF|GET|QUERY)\s*$", re.IGNORECASE
+)
 
 # Digicon / JMRI Virtual heads → LCOS SIGNAL_CMD (set-only on firmware). On by default.
 # Disable with FORWARD_SIGNALHEAD_CMDS = False (or omit --signalhead when already False).
@@ -516,6 +532,167 @@ class DigiconSmlGuard:
                 self._timer = None
 
 
+class SerialSyncWatchdog:
+    """Detect Nano/USB desync and request recovery (reopen COM and/or RESUBSCRIBE).
+
+    Layers (cheapest first):
+      1) USB PING -> ACK PING  (serial path alive)
+      2) Turnout cmd ACK miss streak  (Nano not echoing text)
+      3) Nano boot banner on serial  (reset while handle still open)
+      4) SerialException  (COM stolen / USB drop) -> reopen
+      5) RESUBSCRIBE text  (re-emit event 125 without USB reset)
+
+    MQTT broker resubscribe alone does not fix layout silence — LCOS radio
+    subscriptions live on the Nano.
+    """
+
+    def __init__(
+        self,
+        *,
+        enabled: bool = True,
+        ack_fail_limit: int = SYNC_ACK_FAIL_LIMIT,
+        ping_interval_sec: float = SYNC_USB_PING_INTERVAL_SEC,
+        resubscribe_cooldown_sec: float = SYNC_RESUBSCRIBE_COOLDOWN_SEC,
+        reopen_cooldown_sec: float = SYNC_REOPEN_COOLDOWN_SEC,
+        verbose: bool = False,
+    ) -> None:
+        self.enabled = enabled
+        self.ack_fail_limit = ack_fail_limit
+        self.ping_interval_sec = ping_interval_sec
+        self.resubscribe_cooldown_sec = resubscribe_cooldown_sec
+        self.reopen_cooldown_sec = reopen_cooldown_sec
+        self.verbose = verbose
+        self._lock = threading.Lock()
+        self._ack_fails = 0
+        self._last_ping_mono = 0.0
+        self._last_resubscribe_mono = 0.0
+        self._last_reopen_mono = 0.0
+        self._awaiting_ping_ack = False
+        self._subscription_accepts = 0
+        self._want_reopen = False
+        self._want_resubscribe = False
+        self._reopen_reason = ""
+        self._resubscribe_reason = ""
+
+    def note_turnout_ack(self, ok: bool) -> None:
+        if not self.enabled:
+            return
+        with self._lock:
+            if ok:
+                self._ack_fails = 0
+                return
+            self._ack_fails += 1
+            fails = self._ack_fails
+        print(
+            f"sync: turnout serial ACK miss ({fails}/{self.ack_fail_limit})",
+            file=sys.stderr,
+        )
+        if fails >= self.ack_fail_limit:
+            self.request_reopen(f"ack-miss-{fails}")
+            self.request_resubscribe(f"ack-miss-{fails}")
+
+    def note_serial_line(self, stripped: str) -> None:
+        if not self.enabled:
+            return
+        if stripped.startswith("ACK PING"):
+            with self._lock:
+                self._awaiting_ping_ack = False
+                self._ack_fails = 0
+            return
+        if stripped.startswith("Subscription accepted"):
+            with self._lock:
+                self._subscription_accepts += 1
+                n = self._subscription_accepts
+            if self.verbose:
+                print(f"sync: {stripped} (accepts={n})")
+            return
+        if stripped.startswith("Subscription declined"):
+            print(f"sync: {stripped}", file=sys.stderr)
+            self.request_resubscribe("subscription-declined")
+            return
+        # Nano reboot banner while the host still holds the COM handle.
+        if (
+            stripped.startswith("LCOS Integration Library")
+            or stripped.startswith("LCOS MQTT bridge")
+            or stripped.startswith("@<0")
+        ):
+            print(f"sync: Nano boot marker seen: {stripped!r}", file=sys.stderr)
+            with self._lock:
+                self._subscription_accepts = 0
+            # setup() already re-subscribes; give accepts time, then RESUBSCRIBE if thin.
+            self.request_resubscribe("nano-boot-banner")
+
+    def note_serial_exception(self, exc: BaseException) -> None:
+        print(f"sync: serial exception -> reopen ({exc})", file=sys.stderr)
+        self.request_reopen(f"serial-exception:{exc}")
+
+    def request_reopen(self, reason: str) -> None:
+        if not self.enabled:
+            return
+        now = time.monotonic()
+        with self._lock:
+            if now - self._last_reopen_mono < self.reopen_cooldown_sec:
+                return
+            self._want_reopen = True
+            self._reopen_reason = reason
+
+    def request_resubscribe(self, reason: str) -> None:
+        if not self.enabled:
+            return
+        now = time.monotonic()
+        with self._lock:
+            if now - self._last_resubscribe_mono < self.resubscribe_cooldown_sec:
+                return
+            self._want_resubscribe = True
+            self._resubscribe_reason = reason
+
+    def take_reopen_request(self) -> str | None:
+        with self._lock:
+            if not self._want_reopen:
+                return None
+            self._want_reopen = False
+            self._last_reopen_mono = time.monotonic()
+            return self._reopen_reason
+
+    def take_resubscribe_request(self) -> str | None:
+        with self._lock:
+            if not self._want_resubscribe:
+                return None
+            self._want_resubscribe = False
+            self._last_resubscribe_mono = time.monotonic()
+            self._subscription_accepts = 0
+            return self._resubscribe_reason
+
+    def maybe_queue_usb_ping(self) -> bool:
+        """Return True if the main loop should send USB_PING_SERIAL_LINE."""
+        if not self.enabled:
+            return False
+        now = time.monotonic()
+        with self._lock:
+            if now - self._last_ping_mono < self.ping_interval_sec:
+                return False
+            missed = self._awaiting_ping_ack
+            if missed:
+                self._ack_fails += 1
+                fails = self._ack_fails
+                reason = f"usb-ping-miss-{fails}"
+            else:
+                fails = 0
+                reason = ""
+            self._last_ping_mono = now
+            self._awaiting_ping_ack = True
+        if reason:
+            print(f"sync: USB PING ACK miss ({fails})", file=sys.stderr)
+        if reason and fails >= self.ack_fail_limit:
+            self.request_reopen(reason)
+            self.request_resubscribe(reason)
+        return True
+
+    def mark_resubscribe_sent(self) -> None:
+        if self.verbose:
+            print("sync: RESUBSCRIBE sent — waiting for Subscription accepted lines")
+
+
 def parse_line(line: str) -> tuple[str, str] | None:
     line = line.strip("\r\n")
     if not line or line.isspace():
@@ -556,11 +733,15 @@ def _handle_serial_text_line(
     verbose: bool,
     heartbeat_on: bool,
     sml_guard: DigiconSmlGuard | None = None,
+    sync_watch: SerialSyncWatchdog | None = None,
 ) -> None:
     """Handle one decoded serial text line and route to MQTT/logging."""
     stripped = line.strip("\r\n")
     if not stripped:
         return
+
+    if sync_watch is not None:
+        sync_watch.note_serial_line(stripped)
 
     if stripped.startswith("DBG "):
         if debug:
@@ -637,8 +818,8 @@ def main() -> int:
         "--debug-heartbeat",
         "--hb",
         action="store_true",
-        help="Debug heartbeat: PING serial on an interval; MQTT PING->serial; serial ACK->MQTT "
-        "(also DEBUG_HEARTBEAT in script)",
+        help="Debug heartbeat: PING RADIO on an interval (radio probe); MQTT PING->serial; "
+        "serial ACK->MQTT (also DEBUG_HEARTBEAT in script). Plain PING is USB-only.",
     )
     ap.add_argument(
         "-r",
@@ -653,10 +834,17 @@ def main() -> int:
         help="Forward track/signalhead/<packed> MQTT to serial (EVENT_SIGNAL_CMD). "
         "On by default via FORWARD_SIGNALHEAD_CMDS; this flag forces on.",
     )
+    ap.add_argument(
+        "--sync-watch",
+        action=argparse.BooleanOptionalAction,
+        default=SYNC_WATCH_DEFAULT,
+        help="USB PING + ACK-miss recovery (reopen COM / RESUBSCRIBE). On by default.",
+    )
     args = ap.parse_args()
 
     heartbeat_on = bool(DEBUG_HEARTBEAT or args.debug_heartbeat)
     signalhead_on = bool(FORWARD_SIGNALHEAD_CMDS or args.signalhead)
+    sync_watch = SerialSyncWatchdog(enabled=bool(args.sync_watch), verbose=args.verbose)
 
     ping_cmd_queue: queue.Queue[object] = queue.Queue(maxsize=32)
     # Shared serial outbound queue for turnout + signalhead command lines.
@@ -927,6 +1115,7 @@ def main() -> int:
         f"Opening {args.com} @ {args.baud} baud - Serial -> MQTT"
         f"{'; signalhead->serial ON' if signalhead_on else '; signalhead->serial OFF'}"
         f"; Digicon sml_mode guard ON"
+        f"{'; sync-watch ON' if sync_watch.enabled else '; sync-watch OFF'}"
         ". Ctrl+C to stop."
     )
 
@@ -984,6 +1173,7 @@ def main() -> int:
             verbose=args.verbose,
             heartbeat_on=heartbeat_on,
             sml_guard=sml_guard,
+            sync_watch=sync_watch,
         )
         return line.strip("\r\n").startswith("ACK ")
 
@@ -1029,8 +1219,11 @@ def main() -> int:
                         break
                     _handle_and_is_ack(more)
                 break
-        if not saw_ack and args.verbose:
+        if not saw_ack:
+            sync_watch.note_turnout_ack(False)
             print("MQTT -> serial: no ACK within timeout", file=sys.stderr)
+        else:
+            sync_watch.note_turnout_ack(True)
 
     def _run_sml_guard_release() -> None:
         """Announce disabling → wait → (unless Digicon ACKs) Red → hold → Unheld → disabled."""
@@ -1084,9 +1277,70 @@ def main() -> int:
             sml_guard.publish_head_to_mqtt(packed, "Unheld")
         sml_guard.finish_disabled()
 
+    def _reopen_serial(reason: str) -> bool:
+        nonlocal ser
+        print(f"sync: reopening {args.com} ({reason})", file=sys.stderr)
+        try:
+            if ser is not None and getattr(ser, "is_open", False):
+                ser.close()
+        except Exception:
+            pass
+        time.sleep(1.5)
+        for attempt in range(1, 8):
+            try:
+                ser = serial.Serial(
+                    port=args.com,
+                    baudrate=args.baud,
+                    bytesize=serial.EIGHTBITS,
+                    parity=serial.PARITY_NONE,
+                    stopbits=serial.STOPBITS_ONE,
+                    timeout=0.25,
+                )
+                print(f"sync: serial reopened (attempt {attempt})")
+                boot_deadline = time.monotonic() + 4.0
+                while time.monotonic() < boot_deadline:
+                    line = _read_one_serial_line()
+                    if line is not None:
+                        _handle_and_is_ack(line)
+                    else:
+                        time.sleep(0.05)
+                return True
+            except serial.SerialException as exc:
+                print(f"sync: reopen failed attempt {attempt}: {exc}", file=sys.stderr)
+                time.sleep(1.0)
+        return False
+
+    def _send_resubscribe(reason: str) -> None:
+        print(f"sync: RESUBSCRIBE ({reason})")
+        try:
+            ser.write(RESUBSCRIBE_SERIAL_LINE)
+            ser.flush()
+        except serial.SerialException as exc:
+            sync_watch.note_serial_exception(exc)
+            return
+        sync_watch.mark_resubscribe_sent()
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            line = _read_one_serial_line()
+            if line is not None:
+                _handle_and_is_ack(line)
+            else:
+                time.sleep(0.05)
+
     try:
         while not stop:
             try:
+                reopen_reason = sync_watch.take_reopen_request()
+                if reopen_reason is not None:
+                    if not _reopen_serial(reopen_reason):
+                        time.sleep(2.0)
+                        continue
+                    sync_watch.request_resubscribe(f"after-reopen:{reopen_reason}")
+
+                resub_reason = sync_watch.take_resubscribe_request()
+                if resub_reason is not None:
+                    _send_resubscribe(resub_reason)
+
                 while True:
                     try:
                         line_out = serial_cmd_queue.get_nowait()
@@ -1114,19 +1368,31 @@ def main() -> int:
                     last_heartbeat = now
                     if args.verbose:
                         print(f"HB -> serial {HEARTBEAT_SERIAL_LINE!r}")
+                elif sync_watch.maybe_queue_usb_ping():
+                    try:
+                        ser.write(USB_PING_SERIAL_LINE)
+                        ser.flush()
+                        if args.verbose:
+                            print("sync USB PING -> serial")
+                    except serial.SerialException as exc:
+                        sync_watch.note_serial_exception(exc)
 
                 line = _read_one_serial_line()
                 if line is None:
                     continue
                 _handle_and_is_ack(line)
             except serial.SerialException as e:
-                print(f"Serial error: {e}", file=sys.stderr)
+                sync_watch.note_serial_exception(e)
                 time.sleep(0.5)
     finally:
         sml_guard.stop()
         if bridge_online_published:
             _publish_bridge_status(client, BRIDGE_STATUS_OFFLINE, verbose=args.verbose)
-        ser.close()
+        try:
+            if ser is not None and getattr(ser, "is_open", False):
+                ser.close()
+        except Exception:
+            pass
         client.loop_stop()
         client.disconnect()
         print("Stopped.")
