@@ -27,7 +27,7 @@ Do **not** add `UID_OFFSET_SIGNALS` again on status publish (that produced MQTT 
 
 **Python on by default** (`FORWARD_SIGNALHEAD_CMDS = True`): forwards those topics → Nano.
 
-**TEST LIMIT:** MQTT→serial and the offline RELEASE burst use `DIGICON_PACKED_HEADS = ("432",)` only. Restore `DIGICON_PACKED_HEADS_ALL` when more LCOS signals are live.
+**Live roster:** MQTT→serial SET and the offline RELEASE burst use packed IDs seen on `track/signalmast/<packed>` (MQTT retain or serial `EVENT_SIGNAL`). Filter: octal-legal node and UID **32–47**. Relays (51+) and turnouts are ignored. No bean / no status → no SET.
 
 **Firmware:** `EVENT_SIGNAL_CMD` **set only** (no auto-RELEASE). Optional legacy `IH` prefix on the serial line still accepted. Explicit MQTT payloads `Release` / `Unheld` / `Get` still work for probes.
 
@@ -39,7 +39,7 @@ Retained **`track/bridge/sml_mode`**: `enabled` | `enabling` | `aborting` | `abo
 |-------|----------------|
 | Bridge start / live `track/state` **OFFLINE** | Read last `sml_mode`. **Only if `enabled`**, publish `query` and wait ~5s. Extra OFFLINE while in flight is ignored |
 | Digicon JMRI (SML Enabled) replies `enabled` | Cancel — leave field alone |
-| No ACK (was enabled, controller gone) | Retain **`disabling`**, wait ~3s (late Digicon `enabled` aborts); else **one** serial Red → hold → Unheld for `DIGICON_PACKED_HEADS`, mirrored on MQTT as `track/signalhead/<packed>` **Red** then **Unheld** → retain `disabled` |
+| No ACK (was enabled, controller gone) | Retain **`disabling`**, wait ~3s (late Digicon `enabled` aborts); else **one** serial Red → hold → Unheld for the live `signalmast` roster, mirrored on MQTT as `track/signalhead/<packed>` **Red** then **Unheld** → retain `disabled` |
 | Digicon sees `disabling` while Enabled | Replies `enabled` so bridge suspends RELEASE |
 | Digicon dests stored Enabled, or operator **Force override** | That JMRI instance publishes **`enabling`** and does **not** abort. **Other** Digicon agents publish **`aborting`**, uncheck immediately (no Hold/Red/Unheld), then **`aborted`**. After ~3s the originator publishes **`enabled`**. Solo has nobody to abort. |
 | `enabling` / `aborting` / `aborted` | **Watch** ~12s for `enabled`. If it never arrives, same **query → disabling → Red/Unheld → disabled** challenge |

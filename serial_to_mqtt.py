@@ -21,8 +21,7 @@ Digicon SML guard (track/bridge/sml_mode): on bridge start (and JMRI track/state
 OFFLINE), only if retained/last sml_mode is **enabled**, publish "query". A live Digicon
 with SML Enabled replies "enabled". If no reply within SML_MODE_QUERY_TIMEOUT_SEC, publish
 retained **"disabling"** immediately, wait SML_MODE_DISABLING_WAIT_SEC (live Digicon may
-still ACK "enabled" and abort), then one Red/Unheld burst for DIGICON_PACKED_HEADS
-(currently 432 only) on serial **and** MQTT (`track/signalhead/<packed>` Red, then Unheld)
+still ACK "enabled" and abort), then one Red/Unheld burst for the live signalmast roster (UID 32–47) on serial **and** MQTT (`track/signalhead/<packed>` Red, then Unheld)
 → retain "disabled". **enabling / aborting / aborted** are not treated as
 disabled: watch until **enabled** (SML_MODE_BOOT_ABORT_TIMEOUT_SEC); if that never
 arrives, run the same query/disabling/RELEASE path. Duplicate track/state OFFLINE is ignored
@@ -113,60 +112,21 @@ _TURNOUT_FLAT_PAYLOAD_RE = re.compile(r"^\d+\s+(THROWN|CLOSED|TOGGLE|ON|OFF)\s*$
 # Disable with FORWARD_SIGNALHEAD_CMDS = False (or omit --signalhead when already False).
 FORWARD_SIGNALHEAD_CMDS = True
 SIGNALHEAD_TOPIC_PREFIX = "track/signalhead/"
+SIGNALHEAD_SUBSCRIBE = "track/signalhead/#"
+SIGNALMAST_TOPIC_PREFIX = "track/signalmast/"
+SIGNALMAST_SUBSCRIBE = "track/signalmast/#"
 # Packed digits; optional legacy IH prefix still accepted.
 _SIGNALHEAD_TOPIC_RE = re.compile(r"^track/signalhead/(?:IH)?(\d+)$", re.IGNORECASE)
+_SIGNALMAST_TOPIC_RE = re.compile(r"^track/signalmast/(?:IH)?(\d+)$", re.IGNORECASE)
 _SIGNALHEAD_APPEARANCE_RE = re.compile(
     r"^(Red|Yellow|Green|Dark|Off|FlashRed|FlashYellow|FlashGreen|Lunar|FlashLunar|"
     r"Stop|Approach|Clear|Release|Unheld|Get|Query)\s*$",
     re.IGNORECASE,
 )
 
-# Digicon packed heads (cats/data/signal_wiring.csv). Keep in sync with HEAD_NAMES.
-# Full catalog kept for restore when more LCOS signals are live.
-DIGICON_PACKED_HEADS_ALL = (
-    "432",
-    "433",
-    "434",
-    "436",
-    "437",
-    "438",
-    "439",
-    "1332",
-    "1333",
-    "1334",
-    "1335",
-    "1336",
-    "1337",
-    "1338",
-    "1232",
-    "1233",
-    "1234",
-    "1235",
-    "1236",
-    "1237",
-    "1238",
-    "1239",
-    "1240",
-    "1241",
-    "132",
-    "133",
-    "134",
-    "135",
-    "136",
-    "137",
-    "138",
-    "139",
-    "140",
-    "141",
-    "142",
-    "143",
-)
-# TEST LIMIT: only IH432 is live on LCOS. Use DIGICON_PACKED_HEADS_ALL to restore.
-DIGICON_PACKED_HEADS = ("432",)
-# Subscribe per active packed head (not #) so other Digicon topics stay off serial.
-SIGNALHEAD_SUBSCRIBE_TOPICS = tuple(
-    f"{SIGNALHEAD_TOPIC_PREFIX}{p}" for p in DIGICON_PACKED_HEADS
-)
+# LCOS signal UIDs: UID_OFFSET_SIGNALS .. UID_OFFSET_CROSSINGS-1 (lcos.h).
+LCOS_SIGNAL_UID_MIN = 32
+LCOS_SIGNAL_UID_MAX = 47
 SML_MODE_TOPIC = "track/bridge/sml_mode"
 JMRI_STATE_TOPIC = "track/state"
 SML_MODE_QUERY_TIMEOUT_SEC = 5.0
@@ -205,6 +165,14 @@ def packed_mqtt_lcos_node_validation_error(packed: str) -> str | None:
     return None
 
 
+def packed_is_lcos_signal(packed: str) -> bool:
+    """True if packed is node*100 + signal UID 32–47 and the node is octal-legal."""
+    if packed_mqtt_lcos_node_validation_error(packed) is not None:
+        return False
+    uid = int(packed, 10) % 100
+    return LCOS_SIGNAL_UID_MIN <= uid <= LCOS_SIGNAL_UID_MAX
+
+
 def _publish_bridge_status(
     client: mqtt.Client,
     payload: str,
@@ -235,7 +203,7 @@ class DigiconSmlGuard:
         serial_cmd_queue: queue.Queue,
         *,
         verbose: bool,
-        packed_heads: tuple[str, ...] = DIGICON_PACKED_HEADS,
+        packed_heads: tuple[str, ...] = (),
         query_timeout_sec: float = SML_MODE_QUERY_TIMEOUT_SEC,
         disabling_wait_sec: float = SML_MODE_DISABLING_WAIT_SEC,
         red_hold_sec: float = SML_MODE_RED_HOLD_SEC,
@@ -244,7 +212,7 @@ class DigiconSmlGuard:
         self._client = client
         self._cmd_q = serial_cmd_queue
         self._verbose = verbose
-        self._packed = packed_heads
+        self._packed: set[str] = set(packed_heads)
         self._query_timeout_sec = query_timeout_sec
         self._disabling_wait_sec = disabling_wait_sec
         self._red_hold_sec = red_hold_sec
@@ -265,7 +233,25 @@ class DigiconSmlGuard:
 
     @property
     def packed_heads(self) -> tuple[str, ...]:
-        return self._packed
+        with self._lock:
+            return tuple(sorted(self._packed, key=lambda p: (len(p), p)))
+
+    def has_packed(self, packed: str) -> bool:
+        packed = str(packed).strip()
+        with self._lock:
+            return packed in self._packed
+
+    def note_signalmast(self, packed: str) -> bool:
+        """Enroll packed from track/signalmast (MQTT retain or serial). Returns True if new."""
+        packed = str(packed).strip()
+        if not packed_is_lcos_signal(packed):
+            return False
+        with self._lock:
+            if packed in self._packed:
+                return False
+            self._packed.add(packed)
+        print(f"sml_mode: enrolled packed {packed} from signalmast")
+        return True
 
     def is_in_flight(self) -> bool:
         """True while query-wait, RELEASE queued, or Red/Unheld burst is running."""
@@ -569,6 +555,7 @@ def _handle_serial_text_line(
     debug: bool,
     verbose: bool,
     heartbeat_on: bool,
+    sml_guard: DigiconSmlGuard | None = None,
 ) -> None:
     """Handle one decoded serial text line and route to MQTT/logging."""
     stripped = line.strip("\r\n")
@@ -592,6 +579,9 @@ def _handle_serial_text_line(
     parsed = parse_line(line)
     if parsed is not None:
         topic, payload = parsed
+        mast_m = _SIGNALMAST_TOPIC_RE.match(topic)
+        if mast_m is not None and sml_guard is not None:
+            sml_guard.note_signalmast(mast_m.group(1))
         client.publish(topic, payload, qos=0, retain=True)
         if verbose:
             print(f"TX -> {topic} {payload}")
@@ -709,12 +699,11 @@ def main() -> int:
         _subscribe_line(_client, CMD_TURNOUT_SUBSCRIBE, qos=1)
         _subscribe_line(_client, SML_MODE_TOPIC, qos=1)
         _subscribe_line(_client, JMRI_STATE_TOPIC, qos=1)
+        # signalmast first (live roster, including retain), then signalhead SET/Unheld.
+        _subscribe_line(_client, SIGNALMAST_SUBSCRIBE, qos=1)
         if signalhead_on:
-            for topic in SIGNALHEAD_SUBSCRIBE_TOPICS:
-                _subscribe_line(_client, topic, qos=1)
-            print(
-                f"Signalhead MQTT->serial limited to packed={list(DIGICON_PACKED_HEADS)}"
-            )
+            _subscribe_line(_client, SIGNALHEAD_SUBSCRIBE, qos=1)
+            print("Signalhead MQTT->serial: live roster from track/signalmast/#")
         else:
             print(
                 "Subscribe signalhead: skipped "
@@ -770,6 +759,20 @@ def main() -> int:
                 guard.maybe_start_challenge("jmri-offline")
             return
 
+        # --- signalmast/<packed>: enroll only (retain counts). Never serial. ---
+        mast_m = _SIGNALMAST_TOPIC_RE.match(msg.topic)
+        if mast_m is not None:
+            if isinstance(guard, DigiconSmlGuard):
+                guard.note_signalmast(mast_m.group(1))
+            return
+        if msg.topic.startswith(SIGNALMAST_TOPIC_PREFIX):
+            if args.verbose:
+                print(
+                    f"MQTT signalmast ignored (need packed digits): {msg.topic!r}",
+                    file=sys.stderr,
+                )
+            return
+
         # --- signalhead/<packed> (optional legacy IH prefix) ---
         if not signalhead_on and msg.topic.startswith(SIGNALHEAD_TOPIC_PREFIX):
             return
@@ -819,11 +822,12 @@ def main() -> int:
                     )
                 return
             packed = signal_m.group(1)
-            if packed not in DIGICON_PACKED_HEADS:
+            if not packed_is_lcos_signal(packed) or not (
+                isinstance(guard, DigiconSmlGuard) and guard.has_packed(packed)
+            ):
                 if args.verbose:
                     print(
-                        f"MQTT signalhead ignored (not in DIGICON_PACKED_HEADS): "
-                        f"{msg.topic!r}"
+                        f"MQTT signalhead ignored (not on live roster): {msg.topic!r}"
                     )
                 return
             addr_err = packed_mqtt_lcos_node_validation_error(packed)
@@ -978,6 +982,7 @@ def main() -> int:
             debug=args.debug,
             verbose=args.verbose,
             heartbeat_on=heartbeat_on,
+            sml_guard=sml_guard,
         )
         return line.strip("\r\n").startswith("ACK ")
 

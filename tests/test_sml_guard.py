@@ -31,7 +31,11 @@ if "paho" not in sys.modules:
     sys.modules["paho.mqtt"] = mqtt
     sys.modules["paho.mqtt.client"] = client
 
-from serial_to_mqtt import DIGICON_PACKED_HEADS, DigiconSmlGuard, SML_GUARD_RELEASE
+from serial_to_mqtt import (
+    DigiconSmlGuard,
+    SML_GUARD_RELEASE,
+    packed_is_lcos_signal,
+)
 
 
 class _FakePub:
@@ -49,8 +53,29 @@ class _FakeClient:
 
 
 class DigiconSmlGuardTest(unittest.TestCase):
-    def test_packed_heads_are_432_only(self) -> None:
-        self.assertEqual(DIGICON_PACKED_HEADS, ("432",))
+    def test_default_packed_heads_empty(self) -> None:
+        guard = DigiconSmlGuard(_FakeClient(), queue.Queue(), verbose=False)
+        self.assertEqual(guard.packed_heads, ())
+
+    def test_packed_is_lcos_signal_uid_32_47(self) -> None:
+        self.assertTrue(packed_is_lcos_signal("432"))
+        self.assertTrue(packed_is_lcos_signal("433"))
+        self.assertTrue(packed_is_lcos_signal("447"))
+        self.assertFalse(packed_is_lcos_signal("464"))
+        self.assertFalse(packed_is_lcos_signal("408"))
+        self.assertFalse(packed_is_lcos_signal("559"))
+        self.assertFalse(packed_is_lcos_signal("932"))
+
+    def test_enroll_signalmast_not_relay_or_turnout(self) -> None:
+        guard = DigiconSmlGuard(_FakeClient(), queue.Queue(), verbose=False)
+        self.assertTrue(guard.note_signalmast("432"))
+        self.assertFalse(guard.note_signalmast("432"))
+        self.assertFalse(guard.note_signalmast("464"))
+        self.assertFalse(guard.note_signalmast("408"))
+        self.assertTrue(guard.note_signalmast("433"))
+        self.assertEqual(guard.packed_heads, ("432", "433"))
+        self.assertTrue(guard.has_packed("432"))
+        self.assertFalse(guard.has_packed("464"))
 
     def test_second_offline_skipped_while_waiting(self) -> None:
         q: queue.Queue = queue.Queue()
