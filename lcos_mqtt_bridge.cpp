@@ -219,10 +219,7 @@ static const uint16_t kSubscribeDisplayNodes[] = { 1, 2, 3, 4, 12, 13 };
 // Turnout line "track/cmd/turnout/<packed> ..." uses jmriNode*100+uid; mqttDisplayNodeToLcosNode() before sendShortMessage.
 // Turnout index 0 => UID UID_OFFSET_TURNOUTS+0 (8). Replies on MQTT use pkt.source_node from the wire, not dest.
 #define HB_SERIAL_TOKEN "PING"
-#define HB_RADIO_TOKEN "PING RADIO"
 #define RESUBSCRIBE_TOKEN "RESUBSCRIBE"
-#define HB_TURNOUT_NODE 3
-#define HB_TURNOUT_UID 8
 
 static char s_serialLineBuf[128];
 static size_t s_serialLineLen = 0;
@@ -266,13 +263,7 @@ static void pollSerialTextLineForAck(lcos_layout *layout) {
           Serial.println(F("RESUBSCRIBE start"));
           mqtt_bridge_setup_subscriptions(layout, layout->getNetworkObject()->getNodeID());
           Serial.println(F("RESUBSCRIBE sent"));
-        } else if (layout != NULL && strcmp(s_serialLineBuf, HB_RADIO_TOKEN) == 0) {
-          /* Optional radio probe (debug heartbeat). Plain PING is USB ACK-only. */
-          layout->sendShortMessage(false, HB_TURNOUT_NODE, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
-            (byte)HB_TURNOUT_UID, LCOS_CMD_SET_STATE_NO_LOCK, (byte)ALIGN_THROWN, 0);
-          layout->update();
-        }
-        /* Plain "PING" and unknown text: ACK already printed — no radio traffic. */
+        /* PING / unknown text: ACK already printed — no radio / no turnout. */
       }
       s_serialLineLen = 0;
       /* Keep draining: Digicon often bursts several IH lines; one-per-call left them queued. */

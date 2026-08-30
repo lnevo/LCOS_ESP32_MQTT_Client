@@ -6,10 +6,11 @@ Host companion for an Arduino Nano running the LCOS JMRI/MQTT bridge sketch (rep
 retains ESP32 historically). The Nano sends one line per message:  <topic><space><payload>\\n  (LF only).
 We publish each line to the MQTT broker with retain=True (same as mosquitto_pub -r).
 
-Optional debug heartbeat (DEBUG_HEARTBEAT or --debug-heartbeat): periodically sends PING on serial;
-the sketch ACKs. Inbound MQTT on HEARTBEAT_MQTT_TOPIC with payload PING is forwarded to serial;
-serial ACK lines are published to that topic. Retained MQTT messages are skipped by default
-(--restore / -r applies them: turnout cmds to serial, and retained PING on the heartbeat topic).
+Optional debug heartbeat (DEBUG_HEARTBEAT or --debug-heartbeat): periodically sends USB-only
+PING on serial (same as sync-watch; no turnout throw). Inbound MQTT on HEARTBEAT_MQTT_TOPIC
+with payload PING is forwarded to serial; serial ACK lines are published to that topic.
+Retained MQTT messages are skipped by default (--restore / -r applies them: turnout cmds to
+serial, and retained PING on the heartbeat topic).
 With heartbeat off,
 none of that runs. Turnout state on MQTT still comes only from real layout traffic on the serial
 lines, not from the heartbeat path.
@@ -88,14 +89,14 @@ DEFAULT_BAUD = 115200
 DEFAULT_BROKER = "192.168.137.1"
 DEFAULT_MQTT_PORT = 1883
 
-# --- Debug heartbeat (serial ping + publish Arduino "ACK ..." line to MQTT) ---
+# --- Debug heartbeat (USB-only serial ping; publish Arduino "ACK ..." to MQTT) ---
 # Set True here, or pass --debug-heartbeat on the command line (either enables the feature).
+# Never throws turnouts — health is text ACK only. Turnout ACK miss is separate (normal ops).
 DEBUG_HEARTBEAT = False
 HEARTBEAT_INTERVAL_SEC = 10.0
-# USB-only health (firmware ACKs; no radio). Sync watchdog uses this.
+# USB-only health (firmware ACKs; no radio / no turnout). Sync watchdog + debug HB use this.
 USB_PING_SERIAL_LINE = b"PING\n"
-# Debug heartbeat radio probe (firmware also ACKs, then throws HB turnout).
-HEARTBEAT_SERIAL_LINE = b"PING RADIO\n"
+HEARTBEAT_SERIAL_LINE = USB_PING_SERIAL_LINE
 # Re-emit LCOS event-125 subscriptions on the Nano (after master loss / soft desync).
 RESUBSCRIBE_SERIAL_LINE = b"RESUBSCRIBE\n"
 # MQTT topic for the raw serial reply (e.g. "ACK PING").
@@ -823,8 +824,8 @@ def main() -> int:
         "--debug-heartbeat",
         "--hb",
         action="store_true",
-        help="Debug heartbeat: PING RADIO on an interval (radio probe); MQTT PING->serial; "
-        "serial ACK->MQTT (also DEBUG_HEARTBEAT in script). Plain PING is USB-only.",
+        help="Debug heartbeat: USB-only PING on an interval (no turnout); MQTT PING->serial; "
+        "serial ACK->MQTT (also DEBUG_HEARTBEAT in script). Same serial line as sync-watch.",
     )
     ap.add_argument(
         "-r",
