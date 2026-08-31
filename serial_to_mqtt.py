@@ -646,6 +646,8 @@ class SerialSyncWatchdog:
         self._want_resubscribe = False
         self._reopen_reason = ""
         self._resubscribe_reason = ""
+        # Last RESUBSCRIBE actually written to serial (for quiet ACK filtering).
+        self._last_sent_resubscribe_reason = ""
         # HBLOOP: 1s first RESUBSCRIBE after lost; then 60s echo/RESUBSCRIBE cycles.
         self._hbloop_fails = 0
         self._awaiting_hbloop_echo = False
@@ -923,6 +925,15 @@ class SerialSyncWatchdog:
         with self._lock:
             return bool(self._hbloop_60s_quiet)
 
+    def suppress_auto_resubscribe_echo(self) -> bool:
+        """Hide verbose ACK RESUBSCRIBE / enroll chatter for HBLOOP auto retries.
+
+        Manual MQTT RESUBSCRIBE (and other non-hbloop reasons) still echo.
+        """
+        with self._lock:
+            reason = self._last_sent_resubscribe_reason
+            return reason.startswith("hbloop-") or bool(self._hbloop_60s_quiet)
+
     def take_reopen_request(self) -> str | None:
         with self._lock:
             if not self._want_reopen:
@@ -1080,8 +1091,10 @@ class SerialSyncWatchdog:
                 )
             self.request_resubscribe(reason, force=True)
 
-    def mark_resubscribe_sent(self) -> None:
-        if self.verbose and not self.hbloop_quiet_retry_mode():
+    def mark_resubscribe_sent(self, reason: str = "") -> None:
+        with self._lock:
+            self._last_sent_resubscribe_reason = reason or self._resubscribe_reason
+        if self.verbose and not self.suppress_auto_resubscribe_echo():
             print("sync: RESUBSCRIBE sent - waiting for Subscription accepted lines")
 
 
@@ -1181,6 +1194,21 @@ def _handle_serial_text_line(
         )
         return
     if stripped == "HBLOOP ECHO" or stripped.startswith("HBLOOP ECHO"):
+        return
+
+    # Auto HBLOOP RESUBSCRIBE loop: keep ACK / firmware enroll lines quiet.
+    # Manual RESUBSCRIBE still shows ACK RESUBSCRIBE under --verbose.
+    quiet_auto_resub = (
+        sync_watch is not None and sync_watch.suppress_auto_resubscribe_echo()
+    )
+    if quiet_auto_resub and (
+        stripped.startswith("ACK RESUBSCRIBE")
+        or stripped.startswith("RESUBSCRIBE start")
+        or stripped.startswith("RESUBSCRIBE sent")
+    ):
+        _publish_heartbeat_ack_if_present(
+            client, stripped, heartbeat_on=heartbeat_on, verbose=verbose
+        )
         return
 
     # ACK … from Nano (command echo). Visible with --verbose.
@@ -1848,7 +1876,7 @@ def main() -> int:
         except serial.SerialException as exc:
             sync_watch.note_serial_exception(exc)
             return
-        sync_watch.mark_resubscribe_sent()
+        sync_watch.mark_resubscribe_sent(reason)
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
             line = _read_one_serial_line()

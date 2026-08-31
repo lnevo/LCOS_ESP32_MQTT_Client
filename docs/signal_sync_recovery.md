@@ -27,7 +27,8 @@ Plant event-125 targets nodes **`1,2,3,4,12,13`** plus **self (015)** once for H
 Every ~5s the agent may send serial `HBLOOP` **only if** no fresh `track/sensor/*`,
 `track/signal*`, or `track/turnout/*` feedback arrived in that window. While
 recovering, probes continue; the **timer** fires RESUBSCRIBE (1s first, then 60s).
-Probe/ACK/ECHO lines are quiet; lifecycle only:
+Probe/ACK/ECHO lines are quiet; auto-loop `ACK RESUBSCRIBE` is quiet too (manual
+MQTT `RESUBSCRIBE` still echoes under `--verbose`). Lifecycle only:
 
 | Log | Meaning |
 |-----|---------|

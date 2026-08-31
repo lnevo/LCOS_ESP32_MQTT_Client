@@ -117,6 +117,13 @@ class TestSerialSyncWatchdog(unittest.TestCase):
             w.maybe_queue_hbloop_recovery()
         self.assertEqual(w.take_resubscribe_request(), "hbloop-retry-60s")
         self.assertEqual(buf3.getvalue(), "")
+        w.mark_resubscribe_sent("hbloop-retry-60s")
+        self.assertTrue(w.suppress_auto_resubscribe_echo())
+        w.request_resubscribe(
+            "mqtt-bridge-cmd", force=True, reset_hbloop_budget=True
+        )
+        w.mark_resubscribe_sent("mqtt-bridge-cmd")
+        self.assertFalse(w.suppress_auto_resubscribe_echo())
 
     def test_hbloop_echo_after_lost_resets_for_next_time(self) -> None:
         w = SerialSyncWatchdog(
