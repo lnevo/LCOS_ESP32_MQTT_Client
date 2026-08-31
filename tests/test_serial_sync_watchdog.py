@@ -177,6 +177,32 @@ class TestSerialSyncWatchdog(unittest.TestCase):
         self.assertEqual(w.take_resubscribe_request(), "hbloop-retry-60s")
         self.assertNotIn("HBLOOP miss", buf2.getvalue())
 
+    def test_ops_feedback_gap_hint_rate_limited(self) -> None:
+        from serial_to_mqtt import HBLOOP_FEEDBACK_GAP_SUFFIX
+
+        w = SerialSyncWatchdog(
+            enabled=True,
+            hbloop_enabled=True,
+            hbloop_interval_sec=0.0,
+            hbloop_fail_limit=1,
+            hbloop_first_resub_delay_sec=0.05,
+            hbloop_retry_sec=0.05,
+            feedback_hint_interval_sec=0.08,
+            resubscribe_cooldown_sec=0.0,
+        )
+        self.assertEqual(w.take_ops_feedback_gap_hint(), "")
+        self.assertTrue(w.maybe_queue_hbloop_probe())
+        with redirect_stderr(io.StringIO()):
+            w.maybe_queue_hbloop_probe()  # cold-start lost → recovering
+        hint = w.take_ops_feedback_gap_hint()
+        self.assertEqual(hint, HBLOOP_FEEDBACK_GAP_SUFFIX)
+        self.assertEqual(w.take_ops_feedback_gap_hint(), "")
+        time.sleep(0.09)
+        self.assertEqual(w.take_ops_feedback_gap_hint(), HBLOOP_FEEDBACK_GAP_SUFFIX)
+        with redirect_stderr(io.StringIO()):
+            w.note_hbloop_echo("echo")
+        self.assertEqual(w.take_ops_feedback_gap_hint(), "")
+
     def test_plain_resubscribe_blocked_when_hbloop_established(self) -> None:
         w = SerialSyncWatchdog(
             enabled=True,

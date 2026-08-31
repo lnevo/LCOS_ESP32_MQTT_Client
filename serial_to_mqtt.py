@@ -130,6 +130,9 @@ SYNC_HBLOOP_INTERVAL_SEC = 5.0
 SYNC_HBLOOP_FAIL_LIMIT = 1
 SYNC_HBLOOP_FIRST_RESUB_DELAY_SEC = 1.0
 SYNC_HBLOOP_RETRY_SEC = 60.0
+# While recovering: at most one ops-traffic reminder per this interval.
+SYNC_HBLOOP_FEEDBACK_HINT_INTERVAL_SEC = 60.0
+HBLOOP_FEEDBACK_GAP_SUFFIX = "  [HBLOOP down — cmds OK, no layout feedback]"
 HBLOOP_SERIAL_LINE = b"HBLOOP\n"
 HBLOOP_BLOCK_INDEX = 7
 # Fallbacks until firmware announces HBLOOP_SELF / boot @<0…> (thisNode 015 → "15").
@@ -615,6 +618,7 @@ class SerialSyncWatchdog:
         hbloop_fail_limit: int = SYNC_HBLOOP_FAIL_LIMIT,
         hbloop_first_resub_delay_sec: float = SYNC_HBLOOP_FIRST_RESUB_DELAY_SEC,
         hbloop_retry_sec: float = SYNC_HBLOOP_RETRY_SEC,
+        feedback_hint_interval_sec: float = SYNC_HBLOOP_FEEDBACK_HINT_INTERVAL_SEC,
         verbose: bool = False,
     ) -> None:
         self.enabled = enabled
@@ -629,6 +633,7 @@ class SerialSyncWatchdog:
         self.hbloop_fail_limit = hbloop_fail_limit
         self.hbloop_first_resub_delay_sec = hbloop_first_resub_delay_sec
         self.hbloop_retry_sec = hbloop_retry_sec
+        self.feedback_hint_interval_sec = feedback_hint_interval_sec
         self.verbose = verbose
         self._lock = threading.Lock()
         self._ack_fails = 0
@@ -661,6 +666,8 @@ class SerialSyncWatchdog:
         self._hbloop_awaiting_first_resub = False
         # After entering 60s cadence: one announce, then silent until recovered.
         self._hbloop_60s_quiet = False
+        # Rate-limit ops-traffic "no feedback" reminders while recovering.
+        self._last_feedback_hint_mono = 0.0
         self._last_layout_traffic_mono = 0.0
         self._last_hbloop_tick_mono = time.monotonic()
         self._hbloop_self_oct = HBLOOP_SELF_OCT_DEFAULT
@@ -720,6 +727,7 @@ class SerialSyncWatchdog:
         self._hbloop_cycle_deadline_mono = 0.0
         self._hbloop_awaiting_first_resub = False
         self._hbloop_60s_quiet = False
+        self._last_feedback_hint_mono = 0.0
         if first and not recovering:
             return "established"
         if recovering:
@@ -936,6 +944,27 @@ class SerialSyncWatchdog:
             if reason.startswith("hbloop-"):
                 return True
             return bool(self._hbloop_60s_quiet)
+
+    def take_ops_feedback_gap_hint(self) -> str:
+        """Rate-limited suffix for ops logs while HBLOOP is recovering.
+
+        Call when turnout / signalhead / power / sml_mode traffic is happening.
+        Empty when healthy or within the reminder interval.
+        """
+        if not self.enabled or not self.hbloop_enabled:
+            return ""
+        now = time.monotonic()
+        with self._lock:
+            if not self._hbloop_recovering:
+                return ""
+            if (
+                self._last_feedback_hint_mono > 0.0
+                and now - self._last_feedback_hint_mono
+                < self.feedback_hint_interval_sec
+            ):
+                return ""
+            self._last_feedback_hint_mono = now
+        return HBLOOP_FEEDBACK_GAP_SUFFIX
 
     def take_reopen_request(self) -> str | None:
         with self._lock:
@@ -1754,8 +1783,11 @@ def main() -> int:
         """Signalhead SET/RELEASE — no ACK wait; short gap for USB/Nano pacing."""
         ser.write(line_out)
         ser.flush()
+        hint = sync_watch.take_ops_feedback_gap_hint()
         if args.verbose:
-            print(f"MQTT -> serial {line_out!r}")
+            print(f"MQTT -> serial {line_out!r}{hint}")
+        elif hint:
+            print(f"sync:{hint}", file=sys.stderr)
         _drain_serial_nonblocking(0.02)
         time.sleep(_SIGNALHEAD_GAP_SEC if gap_sec is None else gap_sec)
 
@@ -1766,8 +1798,11 @@ def main() -> int:
             return
         ser.write(line_out)
         ser.flush()
+        hint = sync_watch.take_ops_feedback_gap_hint()
         if args.verbose:
-            print(f"MQTT -> serial {line_out!r}")
+            print(f"MQTT -> serial {line_out!r}{hint}")
+        elif hint:
+            print(f"sync:{hint}", file=sys.stderr)
         deadline = time.monotonic() + _ACK_WAIT_SEC
         saw_ack = False
         while time.monotonic() < deadline:
@@ -1796,9 +1831,10 @@ def main() -> int:
         gap = SML_MODE_SERIAL_GAP_SEC
         hold = SML_MODE_RED_HOLD_SEC
         heads = sml_guard.packed_heads
+        hint = sync_watch.take_ops_feedback_gap_hint()
         print(
             f"sml_mode: serial Red ({list(heads)}), "
-            f"hold {hold}s, then Unheld (gap={gap}s, no ACK wait)"
+            f"hold {hold}s, then Unheld (gap={gap}s, no ACK wait){hint}"
         )
         for packed in heads:
             if sml_guard.should_abort_release():

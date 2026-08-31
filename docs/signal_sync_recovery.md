@@ -38,6 +38,10 @@ MQTT `RESUBSCRIBE` still echoes under `--verbose`). Lifecycle only:
 | `sync: HBLOOP retrying every 60s until recovered` | Entered quiet 60s cadence (no further miss spam) |
 | `sync: HBLOOP recovered` | Echo or layout feedback returned (resets 1s-first) |
 
+While recovering, ops traffic (turnout / signalhead / power / sml RELEASE) may append
+`[HBLOOP down — cmds OK, no layout feedback]` at most once per 60s (same line as the
+cmd log when `--verbose`).
+
 Ghost Digicon topic `track/sensor/<display*100+7>` is never published. Self node OCT is
 announced by firmware as `HBLOOP_SELF <oct>` (from `thisNode` / `getNodeID()`).
 
