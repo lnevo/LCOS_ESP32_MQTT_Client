@@ -25,7 +25,9 @@ Every ~5s the agent sends serial `HBLOOP`. Firmware broadcasts Block-7 from node
 | `…did not re-establish after auto-RESUBSCRIBE` | Disarmed — wait for manual MQTT `RESUBSCRIBE` |
 | `sync: HBLOOP recovered` | Echo returned after lost / auto-RESUB |
 
-Ghost Digicon topic `track/sensor/1507` is never published.
+Ghost Digicon topic `track/sensor/<display*100+7>` is never published. Self node OCT is
+announced by firmware as `HBLOOP_SELF <oct>` (from `thisNode` / `getNodeID()`); the agent
+uses that to quiet self `Subscription accepted` lines (fallback `15` until learned).
 
 ## Failure modes
 

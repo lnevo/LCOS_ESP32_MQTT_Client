@@ -117,14 +117,21 @@ SYNC_SUBSCRIBE_DISPLAY_NODES = (1, 2, 3, 4, 12, 13)
 SYNC_EXPECT_SUBSCRIPTION_ACCEPTS = len(SYNC_SUBSCRIBE_DISPLAY_NODES)
 # After Nano boot/setup(), wait before deciding subscriptions are thin (avoid double RESUBSCRIBE).
 SYNC_BOOT_ACCEPT_GRACE_SEC = 8.0
-# Real HBLOOP: every 5s send serial HBLOOP (Nano Block-7 beat on node 015).
-# Expect HBLOOP ECHO (or suppressed track/sensor/1507). Monitor-only — never auto RESUBSCRIBE.
+# Real HBLOOP: every 5s send serial HBLOOP (Nano Block-7 beat on thisNode).
+# Expect HBLOOP ECHO (or suppressed track/sensor/<display*100+7>). Self oct/topic
+# learned from firmware "HBLOOP_SELF <oct>" (and boot "@<0…>"); fallbacks below.
 SYNC_HBLOOP_DEFAULT = True
 SYNC_HBLOOP_INTERVAL_SEC = 5.0
 SYNC_HBLOOP_FAIL_LIMIT = 3
 HBLOOP_SERIAL_LINE = b"HBLOOP\n"
-HBLOOP_SELF_OCT = "15"
-HBLOOP_SENSOR_TOPIC_PREFIX = "track/sensor/1507"
+HBLOOP_BLOCK_INDEX = 7
+# Fallbacks until firmware announces HBLOOP_SELF / boot @<0…> (thisNode 015 → "15").
+HBLOOP_SELF_OCT_DEFAULT = "15"
+HBLOOP_SENSOR_TOPIC_PREFIX_DEFAULT = (
+    f"track/sensor/{int(HBLOOP_SELF_OCT_DEFAULT) * 100 + HBLOOP_BLOCK_INDEX}"
+)
+_HBLOOP_SELF_RE = re.compile(r"^HBLOOP_SELF\s+(\d+)\s*$", re.IGNORECASE)
+_AT_NODE_RE = re.compile(r"^@<0*(\d+)>\s*$")
 
 # Host bridge presence: same topic for startup and shutdown (retained; QoS 1).
 BRIDGE_STATUS_TOPIC = "track/bridge/status"
@@ -626,6 +633,34 @@ class SerialSyncWatchdog:
         self._hbloop_monitor_armed = bool(hbloop_enabled)
         self._hbloop_auto_resub_spent = False
         self._last_hbloop_tick_mono = time.monotonic()
+        self._hbloop_self_oct = HBLOOP_SELF_OCT_DEFAULT
+        self._hbloop_sensor_topic_prefix = HBLOOP_SENSOR_TOPIC_PREFIX_DEFAULT
+
+    def hbloop_sensor_topic_prefix(self) -> str:
+        with self._lock:
+            return self._hbloop_sensor_topic_prefix
+
+    def note_hbloop_self_oct(self, oct_digits: str) -> None:
+        """Learn bridge node from firmware HBLOOP_SELF / boot @<0…> (OCT digits)."""
+        raw = (oct_digits or "").strip()
+        if not raw:
+            return
+        normalized = raw.lstrip("0") or "0"
+        try:
+            display = int(normalized, 10)
+        except ValueError:
+            return
+        prefix = f"track/sensor/{display * 100 + HBLOOP_BLOCK_INDEX}"
+        with self._lock:
+            prev = self._hbloop_self_oct
+            self._hbloop_self_oct = normalized
+            self._hbloop_sensor_topic_prefix = prefix
+        if self.verbose and normalized != prev:
+            print(
+                f"sync: HBLOOP self node oct={normalized} "
+                f"(quiet Subscription accepted; ghost {prefix})",
+                file=sys.stderr,
+            )
 
     def note_turnout_ack(self, ok: bool) -> None:
         if not self.enabled:
@@ -695,21 +730,32 @@ class SerialSyncWatchdog:
             with self._lock:
                 self._subscription_accepts += 1
                 n = self._subscription_accepts
+                self_oct = self._hbloop_self_oct
             if self.verbose:
-                # Accept line uses OCT node id; self is 015 → "15".
+                # Accept line uses OCT node id (same digits as HBLOOP_SELF).
                 m = re.search(r"node:\s*(\d+)", stripped)
                 oct_node = m.group(1) if m else ""
-                if oct_node != HBLOOP_SELF_OCT:
+                if oct_node != self_oct:
                     print(f"sync: {stripped} (accepts={n})")
             return
         if stripped.startswith("Subscription declined"):
             if self.verbose:
                 print(f"sync: {stripped}", file=sys.stderr)
             return
+        self_m = _HBLOOP_SELF_RE.match(stripped)
+        if self_m is not None:
+            self.note_hbloop_self_oct(self_m.group(1))
+            return
+        at_m = _AT_NODE_RE.match(stripped)
+        if at_m is not None:
+            self.note_hbloop_self_oct(at_m.group(1))
+            if self.verbose:
+                print(f"sync: Nano boot marker seen: {stripped!r}")
+            self.arm_boot_subscription_verify("nano-boot-banner")
+            return
         if (
             stripped.startswith("LCOS Integration Library")
             or stripped.startswith("LCOS MQTT bridge")
-            or stripped.startswith("@<0")
         ):
             if self.verbose:
                 print(f"sync: Nano boot marker seen: {stripped!r}")
@@ -1016,9 +1062,12 @@ def _handle_serial_text_line(
     if parsed is not None:
         topic, payload = parsed
         # Ghost Digicon topic if HBLOOP were MQTT-published — count as echo, never Digicon.
-        if topic == HBLOOP_SENSOR_TOPIC_PREFIX or topic.startswith(
-            HBLOOP_SENSOR_TOPIC_PREFIX + "/"
-        ):
+        ghost = (
+            sync_watch.hbloop_sensor_topic_prefix()
+            if sync_watch is not None
+            else HBLOOP_SENSOR_TOPIC_PREFIX_DEFAULT
+        )
+        if topic == ghost or topic.startswith(ghost + "/"):
             if sync_watch is not None:
                 sync_watch.note_hbloop_echo("1507")
             return

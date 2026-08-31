@@ -405,9 +405,12 @@ void mqtt_bridge_setup_subscriptions(lcos_layout *layout, uint16_t sourceNode) {
     subscribeToNode(net, sourceNode, lcosTarget, SUBSCRIBE_EVENT_MASK);
     layout->update();
   }
-  /* Self: MASTER echoes our HBLOOP Block-7 beat → serial HBLOOP ECHO (ghost 1507). */
+  /* Self: MASTER echoes our HBLOOP Block-7 beat → serial HBLOOP ECHO (ghost sensor topic). */
   subscribeToNode(net, sourceNode, sourceNode, SUBSCRIBE_EVENT_MASK);
   layout->update();
+  /* Host parses this to quiet self Subscription accepted / derive ghost Digicon topic. */
+  Serial.print(F("HBLOOP_SELF "));
+  Serial.println(sourceNode, OCT);
 }
 
 void mqtt_bridge_poll_serial(lcos_layout *layout, LCMNetwork *net, gateway *serial_gw) {

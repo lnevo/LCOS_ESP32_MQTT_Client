@@ -128,6 +128,15 @@ class TestSerialSyncWatchdog(unittest.TestCase):
         )
         self.assertEqual(w.take_resubscribe_request(), "mqtt-force")
 
+    def test_hbloop_self_oct_from_firmware(self) -> None:
+        w = SerialSyncWatchdog(enabled=True, hbloop_enabled=True, verbose=False)
+        w.note_serial_line("HBLOOP_SELF 15")
+        self.assertEqual(w._hbloop_self_oct, "15")
+        self.assertEqual(w.hbloop_sensor_topic_prefix(), "track/sensor/1507")
+        w.note_serial_line("@<012>")
+        self.assertEqual(w._hbloop_self_oct, "12")
+        self.assertEqual(w.hbloop_sensor_topic_prefix(), "track/sensor/1207")
+
     def test_disabled_noop(self) -> None:
         w = SerialSyncWatchdog(enabled=False, ack_fail_limit=1, hbloop_enabled=False)
         w.note_turnout_ack(False)
