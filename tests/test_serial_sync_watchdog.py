@@ -59,35 +59,37 @@ class TestSerialSyncWatchdog(unittest.TestCase):
         self.assertTrue(w.maybe_queue_usb_ping())
         self.assertIsNone(w.take_reopen_request())
 
-    def test_hbloop_first_miss_logs_without_resubscribe(self) -> None:
+    def test_hbloop_cold_start_miss_disarms_without_auto(self) -> None:
         w = SerialSyncWatchdog(
             enabled=True,
             hbloop_enabled=True,
             hbloop_interval_sec=0.0,
-            hbloop_fail_limit=3,
+            hbloop_fail_limit=1,
             resubscribe_cooldown_sec=0.0,
         )
         self.assertTrue(w.maybe_queue_hbloop_probe())  # first probe
         buf = io.StringIO()
         with redirect_stderr(buf):
-            self.assertTrue(w.maybe_queue_hbloop_probe())  # miss 1
-        self.assertIn("HBLOOP miss (1/3)", buf.getvalue())
+            w.maybe_queue_hbloop_probe()  # miss 1 → disarm (never established)
+        self.assertIn("HBLOOP miss (1/1)", buf.getvalue())
+        self.assertIn("never returned", buf.getvalue())
         self.assertIsNone(w.take_resubscribe_request())
+        self.assertFalse(w._hbloop_monitor_armed)
 
-    def test_hbloop_lost_auto_resubscribe_once(self) -> None:
+    def test_hbloop_first_miss_auto_resubscribe(self) -> None:
         w = SerialSyncWatchdog(
             enabled=True,
             hbloop_enabled=True,
             hbloop_interval_sec=0.0,
-            hbloop_fail_limit=3,
+            hbloop_fail_limit=1,
             resubscribe_cooldown_sec=0.0,
         )
         self.assertTrue(w.maybe_queue_hbloop_probe())
         w.note_hbloop_echo("echo")
-        # Arm await + three misses → lost → one auto RESUBSCRIBE.
-        for _ in range(4):
-            w.maybe_queue_hbloop_probe()
-        self.assertEqual(w.take_resubscribe_request(), "hbloop-miss-3")
+        # Next probe arms await; following miss → auto RESUBSCRIBE.
+        w.maybe_queue_hbloop_probe()
+        w.maybe_queue_hbloop_probe()
+        self.assertEqual(w.take_resubscribe_request(), "hbloop-miss-1")
         self.assertTrue(w._hbloop_auto_resub_spent)
         self.assertTrue(w._hbloop_monitor_armed)
 
@@ -96,17 +98,17 @@ class TestSerialSyncWatchdog(unittest.TestCase):
             enabled=True,
             hbloop_enabled=True,
             hbloop_interval_sec=0.0,
-            hbloop_fail_limit=3,
+            hbloop_fail_limit=1,
             resubscribe_cooldown_sec=0.0,
         )
         w.maybe_queue_hbloop_probe()
         w.note_hbloop_echo("echo")
-        for _ in range(4):
-            w.maybe_queue_hbloop_probe()
-        self.assertEqual(w.take_resubscribe_request(), "hbloop-miss-3")
-        # Simulate post-auto probes with no echo → disarm, no second auto.
-        for _ in range(4):
-            w.maybe_queue_hbloop_probe()
+        w.maybe_queue_hbloop_probe()
+        w.maybe_queue_hbloop_probe()
+        self.assertEqual(w.take_resubscribe_request(), "hbloop-miss-1")
+        # Post-auto: arm await, then miss → disarm, no second auto.
+        w.maybe_queue_hbloop_probe()
+        w.maybe_queue_hbloop_probe()
         self.assertIsNone(w.take_resubscribe_request())
         self.assertFalse(w._hbloop_monitor_armed)
 
@@ -120,9 +122,6 @@ class TestSerialSyncWatchdog(unittest.TestCase):
         w.maybe_queue_hbloop_probe()
         w.note_hbloop_echo("echo")
         self.assertTrue(w.hbloop_is_established())
-        # Mirror MQTT handler: refuse plain when established.
-        self.assertTrue(w.hbloop_is_established())
-        # FORCE path still queues.
         self.assertTrue(
             w.request_resubscribe("mqtt-force", force=True, reset_hbloop_budget=True)
         )

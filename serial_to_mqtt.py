@@ -122,7 +122,8 @@ SYNC_BOOT_ACCEPT_GRACE_SEC = 8.0
 # learned from firmware "HBLOOP_SELF <oct>" (and boot "@<0…>"); fallbacks below.
 SYNC_HBLOOP_DEFAULT = True
 SYNC_HBLOOP_INTERVAL_SEC = 5.0
-SYNC_HBLOOP_FAIL_LIMIT = 3
+# First miss while established → one auto-RESUBSCRIBE; next miss without echo → disarm.
+SYNC_HBLOOP_FAIL_LIMIT = 1
 HBLOOP_SERIAL_LINE = b"HBLOOP\n"
 HBLOOP_BLOCK_INDEX = 7
 # Fallbacks until firmware announces HBLOOP_SELF / boot @<0…> (thisNode 015 → "15").
@@ -876,7 +877,7 @@ class SerialSyncWatchdog:
         return True
 
     def maybe_queue_hbloop_probe(self) -> bool:
-        """Queue serial HBLOOP beat. One auto-RESUBSCRIBE on lost; then manual only."""
+        """Queue serial HBLOOP beat. Auto-RESUBSCRIBE on first miss while established."""
         if not self.enabled or not self.hbloop_enabled:
             return False
         now = time.monotonic()
@@ -935,14 +936,14 @@ class SerialSyncWatchdog:
                 file=sys.stderr,
             )
         if trigger_lost:
-            print(f"sync: HBLOOP lost (hbloop-miss-{self.hbloop_fail_limit})", file=sys.stderr)
+            print(f"sync: HBLOOP lost (hbloop-miss-{fails})", file=sys.stderr)
         if do_auto_resub:
             print(
                 "sync: HBLOOP lost - auto RESUBSCRIBE once "
                 "(if echo does not return, wait for manual RESUBSCRIBE)",
                 file=sys.stderr,
             )
-            self.request_resubscribe(f"hbloop-miss-{self.hbloop_fail_limit}", force=True)
+            self.request_resubscribe(f"hbloop-miss-{fails}", force=True)
             return False
         return True
 

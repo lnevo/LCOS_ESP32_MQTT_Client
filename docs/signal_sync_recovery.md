@@ -7,7 +7,7 @@ HBLOOP detects MASTER/distributor loss; **one** auto-`RESUBSCRIBE` on lost, then
 | Event | What should happen |
 |-------|--------------------|
 | **Agent restart** | Open COM **without** DTR reset so Nano does not re-run `setup()` event-125. Prior plant subscriptions stay on MASTER. |
-| **MASTER reboot** | HBLOOP `miss (1/3)` … `lost` → **one auto RESUBSCRIBE**. If echo still missing, monitor disarms — publish MQTT `RESUBSCRIBE` when MASTER is ready. |
+| **MASTER reboot** | HBLOOP first miss → **one auto RESUBSCRIBE**. If echo still missing on the next probe, monitor disarms — publish MQTT `RESUBSCRIBE` when MASTER is ready. |
 | **Intentional Nano reset** | MQTT `REOPEN` (or unplug) pulses DTR → `setup()` plant+self enroll again. |
 
 Plant event-125 targets nodes **`1,2,3,4,12,13`** plus **self (015)** once for HBLOOP echo — never MASTER (`0`).
@@ -19,8 +19,8 @@ Every ~5s the agent sends serial `HBLOOP`. Firmware broadcasts Block-7 from node
 | Log | Meaning |
 |-----|---------|
 | `sync: HBLOOP established` | First echo after start |
-| `sync: HBLOOP miss (1/3) - no ECHO/1507 within 5s` | First miss (often MASTER reboot) |
-| `sync: HBLOOP lost (hbloop-miss-3)` | Three misses after established |
+| `sync: HBLOOP miss (1/1) - no ECHO/1507 within 5s` | First miss while established → auto RESUBSCRIBE |
+| `sync: HBLOOP lost (hbloop-miss-1)` | Lost after that miss |
 | `sync: HBLOOP lost - auto RESUBSCRIBE once` | One automatic enroll retry |
 | `…did not re-establish after auto-RESUBSCRIBE` | Disarmed — wait for manual MQTT `RESUBSCRIBE` |
 | `sync: HBLOOP recovered` | Echo returned after lost / auto-RESUB |
@@ -47,7 +47,7 @@ uses that to quiet self `Subscription accepted` lines (fallback `15` until learn
    - **`RESUBSCRIBE`** — only if HBLOOP is **not** established (no cooldown)
    - **`RESUBSCRIBE FORCE`** — always (no cooldown), even while healthy
    - **`REOPEN`** / **`PING`** / **`HBLOOP`**
-6. HBLOOP: miss → lost → **one** auto-`RESUBSCRIBE`; if no re-establish, disarm for manual.
+6. HBLOOP: first miss while established → **one** auto-`RESUBSCRIBE`; if no re-establish on the next miss, disarm for manual.
 
 ## Firmware
 
