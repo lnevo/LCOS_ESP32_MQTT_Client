@@ -90,7 +90,11 @@ void handleOperationsEvents(DATAGRAM *pkt){
   boolean sendResponse = false;
   layoutNet = layout->getNetworkObject();
 
-  mqttPublishOperationEvent(Serial, pkt);
+  /* Distributor HBLOOP beat: detect echo for sync-watch; never MQTT-publish. */
+  mqtt_bridge_note_operation_event(pkt);
+  if (!mqtt_bridge_is_hbloop_event(pkt)) {
+    mqttPublishOperationEvent(Serial, pkt);
+  }
 
   switch(pkt->event){
     case 1: // node status event
