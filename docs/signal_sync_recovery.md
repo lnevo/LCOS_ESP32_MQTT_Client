@@ -32,9 +32,9 @@ Probe/ACK/ECHO lines are quiet; lifecycle only:
 | Log | Meaning |
 |-----|---------|
 | `sync: HBLOOP established` | First echo (or layout feedback) |
-| `sync: HBLOOP lost - RESUBSCRIBE in 1s; …` | Was established; quick enroll then 60s cadence |
+| `sync: HBLOOP lost - RESUBSCRIBE in 1s` | Was established; quick enroll coming |
 | `sync: HBLOOP miss - RESUBSCRIBE after 1s` | First enroll after lost |
-| `sync: HBLOOP miss - no recover after 60s; RESUBSCRIBE` | Still down — another enroll |
+| `sync: HBLOOP retrying every 60s until recovered` | Entered quiet 60s cadence (no further miss spam) |
 | `sync: HBLOOP recovered` | Echo or layout feedback returned (resets 1s-first) |
 
 Ghost Digicon topic `track/sensor/<display*100+7>` is never published. Self node OCT is

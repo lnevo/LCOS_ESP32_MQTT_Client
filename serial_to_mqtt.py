@@ -657,6 +657,8 @@ class SerialSyncWatchdog:
         self._hbloop_cycle_deadline_mono = 0.0
         # True → next timer fire is the quick 1s RESUBSCRIBE; False → 60s retry cadence.
         self._hbloop_awaiting_first_resub = False
+        # After entering 60s cadence: one announce, then silent until recovered.
+        self._hbloop_60s_quiet = False
         self._last_layout_traffic_mono = 0.0
         self._last_hbloop_tick_mono = time.monotonic()
         self._hbloop_self_oct = HBLOOP_SELF_OCT_DEFAULT
@@ -667,6 +669,7 @@ class SerialSyncWatchdog:
         self._hbloop_recovering = True
         self._hbloop_established = False
         self._hbloop_monitor_armed = True
+        self._hbloop_60s_quiet = False
         if quick_first:
             self._hbloop_cycle_deadline_mono = now + self.hbloop_first_resub_delay_sec
             self._hbloop_awaiting_first_resub = True
@@ -714,6 +717,7 @@ class SerialSyncWatchdog:
         self._hbloop_recovering = False
         self._hbloop_cycle_deadline_mono = 0.0
         self._hbloop_awaiting_first_resub = False
+        self._hbloop_60s_quiet = False
         if first and not recovering:
             return "established"
         if recovering:
@@ -790,7 +794,11 @@ class SerialSyncWatchdog:
     def note_subscription_enroll_window_done(self) -> None:
         """After RESUBSCRIBE drain: one summary if accepts arrived but were incomplete."""
         with self._lock:
-            if self._accept_summary_printed or self._plant_accepts <= 0:
+            if (
+                self._hbloop_60s_quiet
+                or self._accept_summary_printed
+                or self._plant_accepts <= 0
+            ):
                 return
             plants = self._plant_accepts
             expected = self.expect_subscription_accepts
@@ -821,7 +829,11 @@ class SerialSyncWatchdog:
                     self._plant_accepts += 1
                     plants = self._plant_accepts
                     expected = self.expect_subscription_accepts
-                    if not self._accept_summary_printed and plants >= expected:
+                    if (
+                        not self._hbloop_60s_quiet
+                        and not self._accept_summary_printed
+                        and plants >= expected
+                    ):
                         self._accept_summary_printed = True
                         summary = f"sync: Subscriptions accepted ({plants} plants)"
             if summary is not None:
@@ -902,8 +914,14 @@ class SerialSyncWatchdog:
                 self._hbloop_recovering = False
                 self._hbloop_cycle_deadline_mono = 0.0
                 self._hbloop_awaiting_first_resub = False
+                self._hbloop_60s_quiet = False
                 self._seen_hbloop_echo = False
         return True
+
+    def hbloop_quiet_retry_mode(self) -> bool:
+        """True while in silent 60s RESUBSCRIBE cadence (after the one announce)."""
+        with self._lock:
+            return bool(self._hbloop_60s_quiet)
 
     def take_reopen_request(self) -> str | None:
         with self._lock:
@@ -1003,15 +1021,16 @@ class SerialSyncWatchdog:
             if lost_quick:
                 print(
                     f"sync: HBLOOP lost - RESUBSCRIBE in "
-                    f"{self.hbloop_first_resub_delay_sec:.0f}s; then echo every "
-                    f"{self.hbloop_interval_sec:.0f}s / RESUBSCRIBE every "
-                    f"{self.hbloop_retry_sec:.0f}s until recovered",
+                    f"{self.hbloop_first_resub_delay_sec:.0f}s",
                     file=sys.stderr,
                 )
             else:
+                # Cold start enters 60s cadence immediately — one announce, then quiet.
+                with self._lock:
+                    self._hbloop_60s_quiet = True
                 print(
-                    f"sync: HBLOOP lost - echo for {self.hbloop_retry_sec:.0f}s "
-                    f"then RESUBSCRIBE (cold start)",
+                    f"sync: HBLOOP lost - retrying every "
+                    f"{self.hbloop_retry_sec:.0f}s until recovered (cold start)",
                     file=sys.stderr,
                 )
         return True
@@ -1023,6 +1042,7 @@ class SerialSyncWatchdog:
         now = time.monotonic()
         fire = False
         first = False
+        announce_60s = False
         with self._lock:
             if self._hbloop_established or not self._hbloop_recovering:
                 return
@@ -1036,6 +1056,12 @@ class SerialSyncWatchdog:
             self._awaiting_hbloop_echo = False
             self._hbloop_fails = 0
             fire = True
+            if not first and not self._hbloop_60s_quiet:
+                self._hbloop_60s_quiet = True
+                announce_60s = True
+            elif first:
+                # 1s shot done; subsequent fires are the quiet 60s cadence.
+                pass
         if fire:
             if first:
                 print(
@@ -1045,16 +1071,17 @@ class SerialSyncWatchdog:
                 )
                 reason = "hbloop-first-1s"
             else:
+                reason = "hbloop-retry-60s"
+            if announce_60s:
                 print(
-                    f"sync: HBLOOP miss - no recover after {self.hbloop_retry_sec:.0f}s; "
-                    f"RESUBSCRIBE",
+                    f"sync: HBLOOP retrying every {self.hbloop_retry_sec:.0f}s "
+                    f"until recovered",
                     file=sys.stderr,
                 )
-                reason = "hbloop-retry-60s"
             self.request_resubscribe(reason, force=True)
 
     def mark_resubscribe_sent(self) -> None:
-        if self.verbose:
+        if self.verbose and not self.hbloop_quiet_retry_mode():
             print("sync: RESUBSCRIBE sent - waiting for Subscription accepted lines")
 
 
@@ -1812,7 +1839,9 @@ def main() -> int:
         return False
 
     def _send_resubscribe(reason: str) -> None:
-        print(f"sync: RESUBSCRIBE ({reason})")
+        # Quiet 60s HBLOOP cadence: one "retrying every 60s" already printed.
+        if reason != "hbloop-retry-60s" or not sync_watch.hbloop_quiet_retry_mode():
+            print(f"sync: RESUBSCRIBE ({reason})")
         try:
             ser.write(RESUBSCRIBE_SERIAL_LINE)
             ser.flush()
