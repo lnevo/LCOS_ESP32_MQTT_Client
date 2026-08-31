@@ -3,24 +3,21 @@
 HBLOOP watches the radio path to MASTER (often via a **DCC node**). Layout power-off can
 drop that path without clearing MASTER’s subscription RAM.
 
-## Recovery cycle (while unhealthy)
+## Recovery (after established → lost)
 
-1. **lost** → quiet echo probes; **RESUBSCRIBE disarmed for 60s**
-2. If **echo** or **layout traffic** returns in that minute → **recovered** (no enroll)
-3. If still quiet → **miss** + **one RESUBSCRIBE**, then another **60s echo-only** window
-4. Repeat until healthy (covers MASTER reboot while the layout was down: within ~1 minute
-   after the path is back, one enroll can land)
+1. **lost** → **RESUBSCRIBE in 1s**
+2. If still down → keep **echo every 5s**; **RESUBSCRIBE every 60s** until healthy
+3. Echo or layout traffic → **recovered** and **reset** (next loss gets the 1s path again)
 
-Never permanently disarm the monitor after a miss (agent restart with layout down must
-still recover).
+Cold-start (never established): echo for 60s, then RESUBSCRIBE / 60s cycles (no 1s thrash).
 
 ## Agent restart vs MASTER reboot vs layout power
 
 | Event | What should happen |
 |-------|--------------------|
-| **Agent restart** | Open COM **without** DTR. Prior plant subscriptions stay on MASTER. Cold-start miss enters the same 60s cycle (does not give up). |
-| **Layout / DCC off** | **lost**; echo continues; resub disarmed 60s. Path/traffic back → **recovered**. |
-| **MASTER reboot** | Echo stays dead → after 60s **miss** + one `RESUBSCRIBE`; repeat minute cycles until healthy. |
+| **Agent restart** | Open COM **without** DTR. Prior plant subscriptions stay on MASTER. Cold-start miss uses the 60s cycle. |
+| **Layout / DCC off** (after established) | **lost** → RESUBSCRIBE in **1s**; then 5s echo / 60s RESUBSCRIBE until path or enroll heals. |
+| **MASTER reboot** | Same as above; enroll lands once the RF path is up. |
 | **Intentional Nano reset** | MQTT `REOPEN` (or unplug) pulses DTR → `setup()` plant+self enroll again. |
 
 Plant event-125 targets nodes **`1,2,3,4,12,13`** plus **self (015)** once for HBLOOP echo — never MASTER (`0`).
@@ -29,15 +26,16 @@ Plant event-125 targets nodes **`1,2,3,4,12,13`** plus **self (015)** once for H
 
 Every ~5s the agent may send serial `HBLOOP` **only if** no fresh `track/sensor/*`,
 `track/signal*`, or `track/turnout/*` feedback arrived in that window. While
-recovering, probes continue; the **minute timer** fires the one `RESUBSCRIBE` (not
-an echo-miss edge). Probe/ACK/ECHO lines are quiet; lifecycle only:
+recovering, probes continue; the **timer** fires RESUBSCRIBE (1s first, then 60s).
+Probe/ACK/ECHO lines are quiet; lifecycle only:
 
 | Log | Meaning |
 |-----|---------|
 | `sync: HBLOOP established` | First echo (or layout feedback) |
-| `sync: HBLOOP lost - …` | Health dropped / cold-start miss; 60s echo-only |
-| `sync: HBLOOP miss - …; RESUBSCRIBE` | Minute timer: still recovering — one enroll, then echo-only again |
-| `sync: HBLOOP recovered` | Echo or layout feedback returned |
+| `sync: HBLOOP lost - RESUBSCRIBE in 1s; …` | Was established; quick enroll then 60s cadence |
+| `sync: HBLOOP miss - RESUBSCRIBE after 1s` | First enroll after lost |
+| `sync: HBLOOP miss - no recover after 60s; RESUBSCRIBE` | Still down — another enroll |
+| `sync: HBLOOP recovered` | Echo or layout feedback returned (resets 1s-first) |
 
 Ghost Digicon topic `track/sensor/<display*100+7>` is never published. Self node OCT is
 announced by firmware as `HBLOOP_SELF <oct>` (from `thisNode` / `getNodeID()`).
@@ -48,8 +46,8 @@ announced by firmware as `HBLOOP_SELF <oct>` (from `thisNode` / `getNodeID()`).
 |---------|--------------|------------|
 | Turnout cmd, no `ACK …` on serial | USB | COM stolen, Nano reset mid-handle, dead pyserial handle |
 | `ACK` OK, no `track/turnout` / `track/sensor` updates | Radio | MASTER dropped Nano’s event-125 subscriptions |
-| HBLOOP lost, then recovered (no miss) | RF path | DCC/layout routing node off briefly — sub intact |
-| HBLOOP miss + RESUBSCRIBE | Radio | Still quiet after 60s (path up but sub gone, or path still down) |
+| HBLOOP lost → miss 1s → recovered | RF / MASTER | Path or enroll healed quickly |
+| HBLOOP miss every 60s | Radio | Still quiet — path down or MASTER not accepting enroll |
 
 ## Host recovery (`serial_to_mqtt.py`, `--sync-watch` default on)
 
@@ -61,7 +59,7 @@ announced by firmware as `HBLOOP_SELF <oct>` (from `thisNode` / `getNodeID()`).
    - **`RESUBSCRIBE`** — only if HBLOOP is **not** established (no cooldown)
    - **`RESUBSCRIBE FORCE`** — always (no cooldown), even while healthy
    - **`REOPEN`** / **`PING`** / **`HBLOOP`**
-6. HBLOOP minute cycle as above.
+6. HBLOOP recovery as above.
 
 ## Firmware
 

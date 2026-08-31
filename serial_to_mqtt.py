@@ -21,10 +21,9 @@ publish BRIDGE_STATUS_OFFLINE (best-effort before disconnect).
 Host -> bridge ops (not retained): payload RESUBSCRIBE | RESUBSCRIBE FORCE | REOPEN | PING | HBLOOP on
 track/bridge/cmd. Plain MQTT RESUBSCRIBE is refused while HBLOOP is established (use FORCE);
 when not established it fires with no cooldown. HBLOOP: skip probes while sensor/signal*
-feedback is fresh; on loss (or cold-start miss) keep quiet echo probes for 60s with
-RESUBSCRIBE disarmed — if activity/echo returns, no enroll; else one RESUBSCRIBE, then
-another 60s echo-only cycle (repeat until healthy). Lifecycle: established / lost / miss /
-recovered. Auto sync-watch RESUBSCRIBE (USB/boot thin-accept) still uses cooldown.
+feedback is fresh; after established→lost, RESUBSCRIBE in 1s; if still down, echo every 5s
+and RESUBSCRIBE every 60s until echo/traffic recovers (then reset). Cold-start miss uses
+the 60s cycle only. Lifecycle: established / lost / miss / recovered.
 (see docs/archive/manual_resubscribe_hbloop_era.md).
 
 Digicon SML guard (track/bridge/sml_mode): on bridge start (and JMRI track/state
@@ -123,12 +122,13 @@ SYNC_BOOT_ACCEPT_GRACE_SEC = 8.0
 # Expect HBLOOP ECHO (or suppressed track/sensor/<display*100+7>). Self oct/topic
 # learned from firmware "HBLOOP_SELF <oct>" (and boot "@<0…>"); fallbacks below.
 # Layout RF often routes via a DCC node — layout power-off drops the path to MASTER
-# without clearing MASTER's subscription RAM. Recovery cycle while unhealthy:
-#   60s echo-only (RESUBSCRIBE disarmed; probes continue) → if still recovering,
-#   one RESUBSCRIBE on the timer → another 60s echo-only → … until echo/traffic.
+# without clearing MASTER's subscription RAM. After established→lost:
+#   RESUBSCRIBE in 1s; if still down, echo every 5s and RESUBSCRIBE every 60s until
+#   echo/traffic recovers (then reset for the next loss). Cold-start: 60s then enroll.
 SYNC_HBLOOP_DEFAULT = True
 SYNC_HBLOOP_INTERVAL_SEC = 5.0
 SYNC_HBLOOP_FAIL_LIMIT = 1
+SYNC_HBLOOP_FIRST_RESUB_DELAY_SEC = 1.0
 SYNC_HBLOOP_RETRY_SEC = 60.0
 HBLOOP_SERIAL_LINE = b"HBLOOP\n"
 HBLOOP_BLOCK_INDEX = 7
@@ -592,9 +592,9 @@ class SerialSyncWatchdog:
       3) Nano boot banner  (arm thin-accept check; setup() already subscribed)
       4) SerialException  (COM stolen / USB drop) -> reopen
       5) RESUBSCRIBE text  (manual / USB recovery — re-emit event 125)
-      6) HBLOOP: probe when quiet. Unhealthy cycle = 60s echo-only (resub disarmed),
-         then one RESUBSCRIBE if still quiet; repeat until echo/traffic. Never
-         permanently disarm after a miss (agent restart + layout down must recover).
+      6) HBLOOP: probe when quiet. Established→lost: RESUBSCRIBE after 1s; if still
+         down, echo every 5s and RESUBSCRIBE every 60s until echo/traffic. Recover
+         resets the 1s-first path for the next loss. Cold-start uses 60s first.
 
     MQTT broker resubscribe alone does not fix layout silence — LCOS radio
     subscriptions live on the Nano / MASTER.
@@ -613,6 +613,7 @@ class SerialSyncWatchdog:
         hbloop_enabled: bool = SYNC_HBLOOP_DEFAULT,
         hbloop_interval_sec: float = SYNC_HBLOOP_INTERVAL_SEC,
         hbloop_fail_limit: int = SYNC_HBLOOP_FAIL_LIMIT,
+        hbloop_first_resub_delay_sec: float = SYNC_HBLOOP_FIRST_RESUB_DELAY_SEC,
         hbloop_retry_sec: float = SYNC_HBLOOP_RETRY_SEC,
         verbose: bool = False,
     ) -> None:
@@ -626,6 +627,7 @@ class SerialSyncWatchdog:
         self.hbloop_enabled = hbloop_enabled
         self.hbloop_interval_sec = hbloop_interval_sec
         self.hbloop_fail_limit = hbloop_fail_limit
+        self.hbloop_first_resub_delay_sec = hbloop_first_resub_delay_sec
         self.hbloop_retry_sec = hbloop_retry_sec
         self.verbose = verbose
         self._lock = threading.Lock()
@@ -642,29 +644,33 @@ class SerialSyncWatchdog:
         self._want_resubscribe = False
         self._reopen_reason = ""
         self._resubscribe_reason = ""
-        # HBLOOP: traffic-gated probe; minute echo-only cycles with one RESUBSCRIBE each.
+        # HBLOOP: 1s first RESUBSCRIBE after lost; then 60s echo/RESUBSCRIBE cycles.
         self._hbloop_fails = 0
         self._awaiting_hbloop_echo = False
         self._seen_hbloop_echo = False
         self._hbloop_established = False
         self._hbloop_monitor_armed = bool(hbloop_enabled)
         self._hbloop_recovering = False
-        # End of current echo-only (RESUBSCRIBE-disarmed) window.
+        # Next RESUBSCRIBE deadline while recovering.
         self._hbloop_cycle_deadline_mono = 0.0
-        # True after the one RESUBSCRIBE for this cycle; next deadline starts a new cycle.
-        self._hbloop_resub_spent_this_cycle = False
+        # True → next timer fire is the quick 1s RESUBSCRIBE; False → 60s retry cadence.
+        self._hbloop_awaiting_first_resub = False
         self._last_layout_traffic_mono = 0.0
         self._last_hbloop_tick_mono = time.monotonic()
         self._hbloop_self_oct = HBLOOP_SELF_OCT_DEFAULT
         self._hbloop_sensor_topic_prefix = HBLOOP_SENSOR_TOPIC_PREFIX_DEFAULT
 
-    def _begin_hbloop_recovery_cycle_locked(self, now: float) -> None:
-        """Caller holds lock. Start / refresh a 60s echo-only window (no RESUBSCRIBE yet)."""
+    def _begin_hbloop_recovery_cycle_locked(self, now: float, *, quick_first: bool) -> None:
+        """Caller holds lock. Start recovery; quick_first → RESUBSCRIBE after 1s."""
         self._hbloop_recovering = True
         self._hbloop_established = False
-        self._hbloop_cycle_deadline_mono = now + self.hbloop_retry_sec
-        self._hbloop_resub_spent_this_cycle = False
         self._hbloop_monitor_armed = True
+        if quick_first:
+            self._hbloop_cycle_deadline_mono = now + self.hbloop_first_resub_delay_sec
+            self._hbloop_awaiting_first_resub = True
+        else:
+            self._hbloop_cycle_deadline_mono = now + self.hbloop_retry_sec
+            self._hbloop_awaiting_first_resub = False
 
     def hbloop_sensor_topic_prefix(self) -> str:
         with self._lock:
@@ -705,7 +711,7 @@ class SerialSyncWatchdog:
         self._hbloop_monitor_armed = True
         self._hbloop_recovering = False
         self._hbloop_cycle_deadline_mono = 0.0
-        self._hbloop_resub_spent_this_cycle = False
+        self._hbloop_awaiting_first_resub = False
         if first and not recovering:
             return "established"
         if recovering:
@@ -877,7 +883,7 @@ class SerialSyncWatchdog:
             if reset_hbloop_budget:
                 self._hbloop_recovering = False
                 self._hbloop_cycle_deadline_mono = 0.0
-                self._hbloop_resub_spent_this_cycle = False
+                self._hbloop_awaiting_first_resub = False
                 self._seen_hbloop_echo = False
         return True
 
@@ -936,13 +942,14 @@ class SerialSyncWatchdog:
     def maybe_queue_hbloop_probe(self) -> bool:
         """Queue serial HBLOOP beat when layout feedback is quiet.
 
-        While recovering: keep probing (echo may heal without enroll). RESUBSCRIBE
-        is fired by maybe_queue_hbloop_recovery on the minute timer — not here.
+        While recovering: keep probing (echo may heal). RESUBSCRIBE timing is
+        owned by maybe_queue_hbloop_recovery (1s first, then every 60s).
         """
         if not self.enabled or not self.hbloop_enabled:
             return False
         now = time.monotonic()
         trigger_lost = False
+        lost_quick = False
         with self._lock:
             if not self._hbloop_monitor_armed:
                 return False
@@ -965,59 +972,76 @@ class SerialSyncWatchdog:
                     self._hbloop_fails = 0
                     self._awaiting_hbloop_echo = False
                     if self._hbloop_established:
-                        self._begin_hbloop_recovery_cycle_locked(now)
+                        self._begin_hbloop_recovery_cycle_locked(now, quick_first=True)
                         trigger_lost = True
+                        lost_quick = True
                     elif not self._hbloop_recovering:
-                        # Cold start / never established: same minute cycle.
-                        self._begin_hbloop_recovery_cycle_locked(now)
+                        # Cold start: 60s echo then RESUBSCRIBE (no 1s thrash).
+                        self._begin_hbloop_recovery_cycle_locked(now, quick_first=False)
                         trigger_lost = True
                     # else recovering: quiet miss; timer owns RESUBSCRIBE
             self._last_hbloop_tick_mono = now
             self._awaiting_hbloop_echo = True
         if trigger_lost:
-            print(
-                f"sync: HBLOOP lost - echo for {self.hbloop_retry_sec:.0f}s "
-                f"(RESUBSCRIBE disarmed); one RESUBSCRIBE if still quiet",
-                file=sys.stderr,
-            )
+            if lost_quick:
+                print(
+                    f"sync: HBLOOP lost - RESUBSCRIBE in "
+                    f"{self.hbloop_first_resub_delay_sec:.0f}s; then echo every "
+                    f"{self.hbloop_interval_sec:.0f}s / RESUBSCRIBE every "
+                    f"{self.hbloop_retry_sec:.0f}s until recovered",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"sync: HBLOOP lost - echo for {self.hbloop_retry_sec:.0f}s "
+                    f"then RESUBSCRIBE (cold start)",
+                    file=sys.stderr,
+                )
         return True
 
     def maybe_queue_hbloop_recovery(self) -> None:
-        """After the echo-only window, one RESUBSCRIBE if still recovering.
-
-        Echo probes have been running the whole minute; if echo/traffic had
-        returned, recovering would already be cleared.
-        """
+        """Fire RESUBSCRIBE on schedule while recovering: 1s first, then every 60s."""
         if not self.enabled or not self.hbloop_enabled:
             return
         now = time.monotonic()
         fire = False
+        first = False
         with self._lock:
             if self._hbloop_established or not self._hbloop_recovering:
                 return
             deadline = self._hbloop_cycle_deadline_mono
             if deadline <= 0.0 or now < deadline:
                 return
-            # Minute elapsed and still recovering → one RESUBSCRIBE, then disarm again.
-            self._hbloop_resub_spent_this_cycle = True
+            first = self._hbloop_awaiting_first_resub
+            self._hbloop_awaiting_first_resub = False
+            # After this enroll, wait a full retry window before the next one.
             self._hbloop_cycle_deadline_mono = now + self.hbloop_retry_sec
             self._awaiting_hbloop_echo = False
             self._hbloop_fails = 0
             fire = True
         if fire:
-            print(
-                f"sync: HBLOOP miss - no echo/traffic after {self.hbloop_retry_sec:.0f}s; "
-                f"RESUBSCRIBE (then echo-only {self.hbloop_retry_sec:.0f}s)",
-                file=sys.stderr,
-            )
-            self.request_resubscribe("hbloop-cycle-timer", force=True)
+            if first:
+                print(
+                    f"sync: HBLOOP miss - RESUBSCRIBE after "
+                    f"{self.hbloop_first_resub_delay_sec:.0f}s",
+                    file=sys.stderr,
+                )
+                reason = "hbloop-first-1s"
+            else:
+                print(
+                    f"sync: HBLOOP miss - no recover after {self.hbloop_retry_sec:.0f}s; "
+                    f"RESUBSCRIBE",
+                    file=sys.stderr,
+                )
+                reason = "hbloop-retry-60s"
+            self.request_resubscribe(reason, force=True)
             with self._lock:
                 self._hbloop_recovering = True
                 if self._hbloop_cycle_deadline_mono <= 0.0:
                     self._hbloop_cycle_deadline_mono = (
                         time.monotonic() + self.hbloop_retry_sec
                     )
-                    self._hbloop_resub_spent_this_cycle = True
+                    self._hbloop_awaiting_first_resub = False
 
     def mark_resubscribe_sent(self) -> None:
         if self.verbose:
