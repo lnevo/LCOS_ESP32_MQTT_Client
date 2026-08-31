@@ -287,8 +287,10 @@ static void handleTrackPowerCmdFromSerialLine(lcos_layout *layout, const char *r
   | INCLUDE_BUTTON_EVENTS | INCLUDE_SWITCH_EVENTS | INCLUDE_TRACK_POWER_EVENTS | INCLUDE_SENSOR_EVENTS)
 
 /* JMRI display nodes (decimal digit string of RF24 octal addr). Mapped via mqttDisplayNodeToLcosNode.
+ * Plant nodes only — do NOT include MASTER (0). Re-subscribing to node 0 on every Nano
+ * reset fouls a healthy distributor (ACK works, status/sensors silent).
  * Keep in sync with SYNC_SUBSCRIBE_DISPLAY_NODES in serial_to_mqtt.py (boot thin-accept check). */
-static const uint16_t kSubscribeDisplayNodes[] = { 0, 1, 2, 3, 4, 12, 13 };
+static const uint16_t kSubscribeDisplayNodes[] = { 1, 2, 3, 4, 12, 13 };
 
 // --- Serial text from Python (serial_to_mqtt.py) ---
 // Turnout line "track/cmd/turnout/<packed> ..." uses jmriNode*100+uid; mqttDisplayNodeToLcosNode() before sendShortMessage.

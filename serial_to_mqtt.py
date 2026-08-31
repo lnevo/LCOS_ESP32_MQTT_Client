@@ -110,8 +110,8 @@ SYNC_ACK_FAIL_LIMIT = 3
 SYNC_USB_PING_INTERVAL_SEC = 12.0
 SYNC_RESUBSCRIBE_COOLDOWN_SEC = 45.0
 SYNC_REOPEN_COOLDOWN_SEC = 20.0
-# Must match kSubscribeDisplayNodes[] in lcos_mqtt_bridge.cpp (display / JMRI digit nodes).
-SYNC_SUBSCRIBE_DISPLAY_NODES = (0, 1, 2, 3, 4, 12, 13)
+# Must match kSubscribeDisplayNodes[] in lcos_mqtt_bridge.cpp (plant nodes only — no MASTER 0).
+SYNC_SUBSCRIBE_DISPLAY_NODES = (1, 2, 3, 4, 12, 13)
 SYNC_EXPECT_SUBSCRIPTION_ACCEPTS = len(SYNC_SUBSCRIBE_DISPLAY_NODES)
 # After Nano boot/setup(), wait before deciding subscriptions are thin (avoid double RESUBSCRIBE).
 SYNC_BOOT_ACCEPT_GRACE_SEC = 8.0
@@ -775,6 +775,40 @@ def parse_line(line: str) -> tuple[str, str] | None:
     return topic, payload
 
 
+def open_bridge_serial(
+    port: str,
+    baud: int,
+    *,
+    pulse_reset: bool = False,
+    timeout: float = 0.25,
+) -> serial.Serial:
+    """Open COM to the Nano.
+
+    Default pulse_reset=False keeps DTR/RTS low so agent restart does not reset the
+    Nano (no setup() event-125 storm on a healthy MASTER). Use pulse_reset=True for
+    intentional REOPEN / USB recovery so setup() re-enrolls plants.
+    """
+    ser = serial.Serial()
+    ser.port = port
+    ser.baudrate = baud
+    ser.bytesize = serial.EIGHTBITS
+    ser.parity = serial.PARITY_NONE
+    ser.stopbits = serial.STOPBITS_ONE
+    ser.timeout = timeout
+    if not pulse_reset:
+        # Set before open — Windows Arduino drivers pulse DTR on open otherwise.
+        ser.dtr = False
+        ser.rts = False
+    ser.open()
+    if not pulse_reset:
+        try:
+            ser.dtr = False
+            ser.rts = False
+        except Exception:
+            pass
+    return ser
+
+
 def _publish_heartbeat_ack_if_present(
     client: mqtt.Client,
     stripped_line: str,
@@ -1268,14 +1302,7 @@ def main() -> int:
         signal.signal(signal.SIGTERM, on_sigint)
 
     try:
-        ser = serial.Serial(
-            port=args.com,
-            baudrate=args.baud,
-            bytesize=serial.EIGHTBITS,
-            parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_ONE,
-            timeout=0.25,
-        )
+        ser = open_bridge_serial(args.com, args.baud, pulse_reset=False)
     except serial.SerialException as e:
         print(f"Serial open failed: {e}", file=sys.stderr)
         if bridge_online_published:
@@ -1423,13 +1450,8 @@ def main() -> int:
         time.sleep(1.5)
         for attempt in range(1, 8):
             try:
-                ser = serial.Serial(
-                    port=args.com,
-                    baudrate=args.baud,
-                    bytesize=serial.EIGHTBITS,
-                    parity=serial.PARITY_NONE,
-                    stopbits=serial.STOPBITS_ONE,
-                    timeout=0.25,
+                ser = open_bridge_serial(
+                    args.com, args.baud, pulse_reset=True
                 )
                 print(f"sync: serial reopened (attempt {attempt})")
                 boot_deadline = time.monotonic() + 4.0
