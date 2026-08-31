@@ -751,6 +751,10 @@ class SerialSyncWatchdog:
             self._awaiting_hbloop_echo = False
             self._hbloop_fails = 0
             self._hbloop_monitor_armed = True
+            self._hbloop_established = False
+            # Allow a fresh establish after manual RESUBSCRIBE.
+            self._seen_hbloop_echo = False
+            self._last_hbloop_tick_mono = now
         return True
 
     def take_reopen_request(self) -> str | None:
@@ -836,7 +840,7 @@ class SerialSyncWatchdog:
                         # Never got an echo — disarm so we do not spam forever.
                         self._hbloop_monitor_armed = False
                         print(
-                            "sync: HBLOOP echo never returned after enroll — monitor disarmed "
+                            "sync: HBLOOP echo never returned after enroll - monitor disarmed "
                             "(plants stay enrolled; use MQTT RESUBSCRIBE if sensors die)",
                             file=sys.stderr,
                         )
@@ -846,13 +850,13 @@ class SerialSyncWatchdog:
         if fails:
             print(
                 f"sync: HBLOOP miss ({fails}/{self.hbloop_fail_limit}) "
-                f"— no ECHO/1507 within {self.hbloop_interval_sec:.0f}s",
+                f"- no ECHO/1507 within {self.hbloop_interval_sec:.0f}s",
                 file=sys.stderr,
             )
         if trigger_lost:
             print(f"sync: HBLOOP lost (hbloop-miss-{self.hbloop_fail_limit})", file=sys.stderr)
             print(
-                "sync: HBLOOP lost — distributor likely down; MQTT RESUBSCRIBE when ready "
+                "sync: HBLOOP lost - distributor likely down; MQTT RESUBSCRIBE when ready "
                 "(monitor will keep probing; no auto-RESUBSCRIBE)",
                 file=sys.stderr,
             )
@@ -860,7 +864,7 @@ class SerialSyncWatchdog:
 
     def mark_resubscribe_sent(self) -> None:
         if self.verbose:
-            print("sync: RESUBSCRIBE sent — waiting for Subscription accepted lines")
+            print("sync: RESUBSCRIBE sent - waiting for Subscription accepted lines")
 
 
 def parse_line(line: str) -> tuple[str, str] | None:
