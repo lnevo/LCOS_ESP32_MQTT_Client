@@ -1,33 +1,33 @@
 # Bridge sync recovery (USB + LCOS radio)
 
-HBLOOP detects MASTER/distributor loss; **one** auto-`RESUBSCRIBE` on lost, then manual.
+HBLOOP detects MASTER/distributor loss with **traffic-gated** probes and paced auto-`RESUBSCRIBE`.
 
 ## Agent restart vs MASTER reboot
 
 | Event | What should happen |
 |-------|--------------------|
 | **Agent restart** | Open COM **without** DTR reset so Nano does not re-run `setup()` event-125. Prior plant subscriptions stay on MASTER. |
-| **MASTER reboot** | HBLOOP first miss → **one auto RESUBSCRIBE**. If echo still missing on the next probe, monitor disarms — publish MQTT `RESUBSCRIBE` when MASTER is ready. |
+| **MASTER reboot** | First HBLOOP miss → wait **1s** → auto `RESUBSCRIBE`. Retry every **60s** until echo or sensor/signal* feedback returns. |
 | **Intentional Nano reset** | MQTT `REOPEN` (or unplug) pulses DTR → `setup()` plant+self enroll again. |
 
 Plant event-125 targets nodes **`1,2,3,4,12,13`** plus **self (015)** once for HBLOOP echo — never MASTER (`0`).
 
 ## HBLOOP
 
-Every ~5s the agent sends serial `HBLOOP`. Firmware broadcasts Block-7 from node 015; if MASTER still redistributes to our self-subscription, Nano prints `HBLOOP ECHO`.
+Every ~5s the agent may send serial `HBLOOP` **only if** no fresh `track/sensor/*` or `track/signal*` feedback arrived in that window (layout traffic proves the distributor).
+
+Firmware broadcasts Block-7 from node 015; if MASTER redistributes it, Nano prints `HBLOOP ECHO`.
 
 | Log | Meaning |
 |-----|---------|
-| `sync: HBLOOP established` | First echo after start |
-| `sync: HBLOOP miss (1/1) - no ECHO/1507 within 5s` | First miss while established → auto RESUBSCRIBE |
-| `sync: HBLOOP lost (hbloop-miss-1)` | Lost after that miss |
-| `sync: HBLOOP lost - auto RESUBSCRIBE once` | One automatic enroll retry |
-| `…did not re-establish after auto-RESUBSCRIBE` | Disarmed — wait for manual MQTT `RESUBSCRIBE` |
-| `sync: HBLOOP recovered` | Echo returned after lost / auto-RESUB |
+| `sync: HBLOOP established` | First echo (or layout feedback) |
+| `sync: HBLOOP miss (1/1)` | Probe got no echo within 5s |
+| `sync: HBLOOP lost - auto RESUBSCRIBE in 1s` | First recovery attempt scheduled |
+| `sync: HBLOOP recovery RESUBSCRIBE (hbloop-retry-60s)` | Still down — retry enroll |
+| `sync: HBLOOP recovered` | Echo or sensor/signal* feedback returned |
 
 Ghost Digicon topic `track/sensor/<display*100+7>` is never published. Self node OCT is
-announced by firmware as `HBLOOP_SELF <oct>` (from `thisNode` / `getNodeID()`); the agent
-uses that to quiet self `Subscription accepted` lines (fallback `15` until learned).
+announced by firmware as `HBLOOP_SELF <oct>` (from `thisNode` / `getNodeID()`).
 
 ## Failure modes
 
@@ -35,7 +35,7 @@ uses that to quiet self `Subscription accepted` lines (fallback `15` until learn
 |---------|--------------|------------|
 | Turnout cmd, no `ACK …` on serial | USB | COM stolen, Nano reset mid-handle, dead pyserial handle |
 | `ACK` OK, no `track/turnout` / `track/sensor` updates | Radio | MASTER dropped Nano’s event-125 subscriptions |
-| HBLOOP miss / lost | Radio | Distributor down (MASTER reboot) — auto once, then manual |
+| HBLOOP miss / lost | Radio | Distributor down — auto resub (1s), then every 60s |
 
 ## Host recovery (`serial_to_mqtt.py`, `--sync-watch` default on)
 
@@ -47,7 +47,7 @@ uses that to quiet self `Subscription accepted` lines (fallback `15` until learn
    - **`RESUBSCRIBE`** — only if HBLOOP is **not** established (no cooldown)
    - **`RESUBSCRIBE FORCE`** — always (no cooldown), even while healthy
    - **`REOPEN`** / **`PING`** / **`HBLOOP`**
-6. HBLOOP: first miss while established → **one** auto-`RESUBSCRIBE`; if no re-establish on the next miss, disarm for manual.
+6. HBLOOP: traffic-gated probe; miss → 1s → RESUBSCRIBE; retry every 60s until recovered.
 
 ## Firmware
 
