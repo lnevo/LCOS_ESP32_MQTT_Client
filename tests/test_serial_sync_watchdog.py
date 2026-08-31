@@ -6,7 +6,7 @@ from __future__ import annotations
 import io
 import time
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 
 from serial_to_mqtt import SerialSyncWatchdog
 
@@ -175,6 +175,24 @@ class TestSerialSyncWatchdog(unittest.TestCase):
         w.note_serial_line("@<012>")
         self.assertEqual(w._hbloop_self_oct, "12")
         self.assertEqual(w.hbloop_sensor_topic_prefix(), "track/sensor/1207")
+
+    def test_subscription_accepts_rolled_up(self) -> None:
+        w = SerialSyncWatchdog(
+            enabled=True,
+            hbloop_enabled=False,
+            expect_subscription_accepts=2,
+            verbose=True,
+        )
+        w.note_hbloop_self_oct("15")
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            w.note_serial_line("Subscription accepted - node: 1")
+            w.note_serial_line("Subscription accepted - node: 15")  # self — quiet
+            w.note_serial_line("Subscription accepted - node: 2")
+        text = buf.getvalue()
+        self.assertEqual(text.count("Subscriptions accepted"), 1)
+        self.assertIn("(2 plants)", text)
+        self.assertNotIn("node: 1", text)
 
     def test_disabled_noop(self) -> None:
         w = SerialSyncWatchdog(enabled=False, ack_fail_limit=1, hbloop_enabled=False)

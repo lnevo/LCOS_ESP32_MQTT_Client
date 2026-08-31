@@ -24,7 +24,7 @@ when not established it fires with no cooldown. HBLOOP: skip probes while sensor
 feedback is fresh; after established→lost, RESUBSCRIBE in 1s; if still down, echo every 5s
 and RESUBSCRIBE every 60s until echo/traffic recovers (then reset). Cold-start miss uses
 the 60s cycle only. Lifecycle: established / lost / miss / recovered.
-(see docs/archive/manual_resubscribe_hbloop_era.md).
+See docs/signal_sync_recovery.md.
 
 Digicon SML guard (track/bridge/sml_mode): on bridge start (and JMRI track/state
 OFFLINE), only if retained/last sml_mode is **enabled**, publish "query". A live Digicon
@@ -638,6 +638,8 @@ class SerialSyncWatchdog:
         self._last_reopen_mono = 0.0
         self._awaiting_ping_ack = False
         self._subscription_accepts = 0
+        self._plant_accepts = 0
+        self._accept_summary_printed = False
         self._boot_verify_deadline = 0.0
         self._boot_verify_reason = ""
         self._want_reopen = False
@@ -758,6 +760,8 @@ class SerialSyncWatchdog:
             # Multiple boot banner lines arrive; only zero accepts on first arm.
             if self._boot_verify_deadline <= 0.0:
                 self._subscription_accepts = 0
+                self._plant_accepts = 0
+                self._accept_summary_printed = False
                 self._boot_verify_reason = reason
             self._boot_verify_deadline = now + self.boot_accept_grace_sec
 
@@ -783,6 +787,16 @@ class SerialSyncWatchdog:
         )
         self.request_resubscribe(reason)
 
+    def note_subscription_enroll_window_done(self) -> None:
+        """After RESUBSCRIBE drain: one summary if accepts arrived but were incomplete."""
+        with self._lock:
+            if self._accept_summary_printed or self._plant_accepts <= 0:
+                return
+            plants = self._plant_accepts
+            expected = self.expect_subscription_accepts
+            self._accept_summary_printed = True
+        print(f"sync: Subscriptions accepted ({plants}/{expected} plants)")
+
     def note_serial_line(self, stripped: str) -> None:
         if not self.enabled:
             return
@@ -797,20 +811,24 @@ class SerialSyncWatchdog:
             self.note_hbloop_echo("echo")
             return
         if stripped.startswith("Subscription accepted"):
+            summary: str | None = None
             with self._lock:
                 self._subscription_accepts += 1
-                n = self._subscription_accepts
                 self_oct = self._hbloop_self_oct
-            if self.verbose:
-                # Accept line uses OCT node id (same digits as HBLOOP_SELF).
                 m = re.search(r"node:\s*(\d+)", stripped)
                 oct_node = m.group(1) if m else ""
                 if oct_node != self_oct:
-                    print(f"sync: {stripped} (accepts={n})")
+                    self._plant_accepts += 1
+                    plants = self._plant_accepts
+                    expected = self.expect_subscription_accepts
+                    if not self._accept_summary_printed and plants >= expected:
+                        self._accept_summary_printed = True
+                        summary = f"sync: Subscriptions accepted ({plants} plants)"
+            if summary is not None:
+                print(summary)
             return
         if stripped.startswith("Subscription declined"):
-            if self.verbose:
-                print(f"sync: {stripped}", file=sys.stderr)
+            print(f"sync: {stripped}", file=sys.stderr)
             return
         self_m = _HBLOOP_SELF_RE.match(stripped)
         if self_m is not None:
@@ -856,8 +874,8 @@ class SerialSyncWatchdog:
         """Queue RESUBSCRIBE.
 
         force=True: bypass cooldown (MQTT FORCE, HBLOOP auto-lost, etc.).
-        reset_hbloop_budget=True (manual MQTT): clear the one-shot auto-RESUBSCRIBE flag
-        so a later MASTER reboot can auto-recover once again.
+        reset_hbloop_budget=True (manual MQTT): clear recovering / timers so the next
+        established→lost cycle again uses the quick 1s RESUBSCRIBE first.
         """
         if not self.enabled:
             return False
@@ -900,19 +918,18 @@ class SerialSyncWatchdog:
                 return None
             self._want_resubscribe = False
             self._subscription_accepts = 0
+            self._plant_accepts = 0
+            self._accept_summary_printed = False
             return self._resubscribe_reason or "resubscribe"
 
     def note_hbloop_echo(self, source: str = "echo") -> None:
         """Real LCOS HBLOOP path: serial HBLOOP ECHO or suppressed track/sensor/1507."""
         with self._lock:
-            cleared = self._hbloop_fails
             label = self._mark_hbloop_healthy_locked(source)
         if label == "established":
             print("sync: HBLOOP established", file=sys.stderr)
         elif label and label.startswith("recovered:"):
             print("sync: HBLOOP recovered", file=sys.stderr)
-        elif cleared and self.verbose:
-            print(f"sync: HBLOOP ok ({source})", file=sys.stderr)
 
     def maybe_queue_usb_ping(self) -> bool:
         """Return True if the main loop should send USB_PING_SERIAL_LINE."""
@@ -1035,13 +1052,6 @@ class SerialSyncWatchdog:
                 )
                 reason = "hbloop-retry-60s"
             self.request_resubscribe(reason, force=True)
-            with self._lock:
-                self._hbloop_recovering = True
-                if self._hbloop_cycle_deadline_mono <= 0.0:
-                    self._hbloop_cycle_deadline_mono = (
-                        time.monotonic() + self.hbloop_retry_sec
-                    )
-                    self._hbloop_awaiting_first_resub = False
 
     def mark_resubscribe_sent(self) -> None:
         if self.verbose:
@@ -1817,6 +1827,7 @@ def main() -> int:
                 _handle_and_is_ack(line)
             else:
                 time.sleep(0.05)
+        sync_watch.note_subscription_enroll_window_done()
 
     try:
         while not stop:

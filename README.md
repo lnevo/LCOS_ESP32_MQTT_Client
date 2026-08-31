@@ -84,15 +84,17 @@ Or use **`run_serial_mqtt.cmd`** / **`run_serial_mqtt.sh`** (edit COM/broker def
 | `--no-sync-watch` | Disable USB PING / ACK-miss recovery |
 | `--debug-heartbeat` | Extra USB-only `PING` interval (no turnout throws) |
 
-**Sync-watch (default on):** quiet USB `PING` every ~12s; missed ACKs or turnout ACK failures reopen COM and/or send serial `RESUBSCRIBE`. Nano `setup()` already subscribes on reset — the host does **not** double-subscribe on every boot banner unless accepts look thin.
+**Sync-watch (default on):** quiet USB `PING` every ~12s; missed ACKs or turnout ACK failures reopen COM and/or send serial `RESUBSCRIBE`. Nano `setup()` already subscribes on reset — the host does **not** double-subscribe on every boot banner unless accepts look thin. **HBLOOP** (radio path): after established→lost, auto-`RESUBSCRIBE` in **1s**, then echo every **5s** / `RESUBSCRIBE` every **60s** until recovered — see **`docs/signal_sync_recovery.md`**.
 
 **Host ops** (not retained): publish to `track/bridge/cmd`:
 
 | Payload | Effect |
 |---------|--------|
 | `PING` | USB-only health (`ACK PING`) |
-| `RESUBSCRIBE` | Re-emit event 125 to the firmware node list |
-| `REOPEN` | Reopen the serial port |
+| `RESUBSCRIBE` | Re-emit event 125 (refused while HBLOOP established — use `RESUBSCRIBE FORCE`) |
+| `RESUBSCRIBE FORCE` | Always re-emit event 125 |
+| `REOPEN` | Reopen the serial port (DTR reset → Nano `setup()` enroll) |
+| `HBLOOP` | One Block-7 distributor echo probe |
 
 Presence: retained `track/bridge/status` = `online` / `offline`.
 

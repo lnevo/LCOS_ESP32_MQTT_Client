@@ -146,7 +146,7 @@ def main() -> int:
         lambda t: "HBLOOP established" in t or "HBLOOP recovered" in t or "no HBLOOP ECHO" in t,
         20.0,
     )
-    echo_ok = "HBLOOP established" in text or "HBLOOP recovered" in text or "HBLOOP ok" in text
+    echo_ok = "HBLOOP established" in text or "HBLOOP recovered" in text
     print(f"ECHO_OK={echo_ok}", flush=True)
 
     rx: list[str] = []
@@ -167,13 +167,17 @@ def main() -> int:
     sensor_ok = len(sensors) > 0
     print(f"SENSOR_OK={sensor_ok}", flush=True)
 
-    print(f"=== hold {args.hold_sec:.0f}s watching miss spiral ===", flush=True)
+    print(f"=== hold {args.hold_sec:.0f}s watching HBLOOP ===", flush=True)
     time.sleep(args.hold_sec)
     text = LOG.read_text(encoding="utf-8", errors="replace") if LOG.exists() else ""
-    miss3 = text.count("HBLOOP lost (hbloop-miss-3)")
+    lost = text.count("HBLOOP lost")
+    miss = text.count("HBLOOP miss")
     resub = text.count("sync: RESUBSCRIBE (")
-    ok_lines = text.count("HBLOOP ok")
-    print(f"HOLD miss3_events={miss3} resubscribe_calls={resub} hbloop_ok_lines={ok_lines}", flush=True)
+    recovered = text.count("HBLOOP recovered")
+    print(
+        f"HOLD lost={lost} miss={miss} resubscribe_calls={resub} recovered={recovered}",
+        flush=True,
+    )
     for line in text.splitlines()[-40:]:
         if "sync:" in line or "Subscription" in line:
             print(line.encode("ascii", "replace").decode("ascii"), flush=True)
@@ -184,8 +188,11 @@ def main() -> int:
     except subprocess.TimeoutExpired:
         proc.kill()
 
-    ok = sensor_ok and miss3 == 0
-    print(f"RESULT {'PASS' if ok else 'FAIL'} sensor_ok={sensor_ok} no_miss_spiral={miss3==0}", flush=True)
+    ok = sensor_ok and echo_ok
+    print(
+        f"RESULT {'PASS' if ok else 'FAIL'} sensor_ok={sensor_ok} echo_ok={echo_ok}",
+        flush=True,
+    )
     return 0 if ok else 2
 
 
