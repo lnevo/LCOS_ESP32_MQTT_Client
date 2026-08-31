@@ -57,7 +57,6 @@ void setup() {
   Serial.println(F(">"));
 
   layout->update();
-  /* One-shot plant event-125 at boot only (same as pre-HBLOOP). */
   mqtt_bridge_setup_subscriptions(layout, thisNode);
 }
 
@@ -91,11 +90,7 @@ void handleOperationsEvents(DATAGRAM *pkt){
   boolean sendResponse = false;
   layoutNet = layout->getNetworkObject();
 
-  /* Distributor HBLOOP beat: detect echo for sync-watch; never MQTT-publish. */
-  mqtt_bridge_note_operation_event(pkt);
-  if (!mqtt_bridge_is_hbloop_event(pkt)) {
-    mqttPublishOperationEvent(Serial, pkt);
-  }
+  mqttPublishOperationEvent(Serial, pkt);
 
   switch(pkt->event){
     case 1: // node status event

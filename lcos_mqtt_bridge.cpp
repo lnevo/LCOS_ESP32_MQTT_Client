@@ -127,11 +127,6 @@ static void handleTurnoutCmdFromSerialLine(lcos_layout *layout, const char *rest
   layout->sendShortMessage(false, lcosNode, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
     wire_uid, LCOS_CMD_SET_STATE_NO_LOCK, align, 0);
   layout->update();
-  /* Lab: SET is ACKed with EVENT_TURNOUT_CMD only — no spontaneous EVENT_TURNOUT.
-   * Follow with GET (index) so MQTT/JMRI see the new alignment (same path as a manual GET). */
-  layout->sendShortMessage(false, lcosNode, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
-    wire_index, LCOS_CMD_GET_STATE, 0, 0);
-  layout->update();
 }
 
 /* JMRI Virtual head: track/signalhead/<packed> Red|Yellow|Green|… (optional legacy IH prefix). */
@@ -292,8 +287,7 @@ static void handleTrackPowerCmdFromSerialLine(lcos_layout *layout, const char *r
   | INCLUDE_BUTTON_EVENTS | INCLUDE_SWITCH_EVENTS | INCLUDE_TRACK_POWER_EVENTS | INCLUDE_SENSOR_EVENTS)
 
 /* JMRI display nodes (decimal digit string of RF24 octal addr). Mapped via mqttDisplayNodeToLcosNode.
- * Keep in sync with SYNC_SUBSCRIBE_DISPLAY_NODES in serial_to_mqtt.py.
- * Exact pre-HBLOOP plant list (4255f74) — no self-sub. */
+ * Keep in sync with SYNC_SUBSCRIBE_DISPLAY_NODES in serial_to_mqtt.py (boot thin-accept check). */
 static const uint16_t kSubscribeDisplayNodes[] = { 0, 1, 2, 3, 4, 12, 13 };
 
 // --- Serial text from Python (serial_to_mqtt.py) ---
@@ -301,12 +295,9 @@ static const uint16_t kSubscribeDisplayNodes[] = { 0, 1, 2, 3, 4, 12, 13 };
 // Turnout index 0 => UID UID_OFFSET_TURNOUTS+0 (8). Replies on MQTT use pkt.source_node from the wire, not dest.
 // Any non-empty text line gets "ACK <line>" first. PING is USB health only (no turnout / no radio).
 #define RESUBSCRIBE_TOKEN "RESUBSCRIBE"
-/* Broadcast Block status to MASTER; if subscribed to self, distributor should echo → HBLOOP ECHO. */
-#define HBLOOP_TOKEN "HBLOOP"
 
 static char s_serialLineBuf[128];
 static size_t s_serialLineLen = 0;
-static byte s_hbloop_level = 0;
 
 static void subscribeToNode(LCMNetwork *net, uint16_t sourceNode, uint16_t targetNode, uint16_t eventMask) {
   DATAGRAM out;
@@ -314,7 +305,6 @@ static void subscribeToNode(LCMNetwork *net, uint16_t sourceNode, uint16_t targe
   out.to_node = 0;
   out.event_type = ETYPE_OPERATING;
   out.event = 125;
-  /* Match pre-HBLOOP working enroll (bare-client): mask + target only. */
   out.data0 = highByte(eventMask);
   out.data1 = lowByte(eventMask);
   out.data2 = highByte(targetNode);
@@ -324,36 +314,6 @@ static void subscribeToNode(LCMNetwork *net, uint16_t sourceNode, uint16_t targe
   out.data6 = 0;
   out.cmd_response = 0;
   net->emitEvent(false, 0, &out);
-}
-
-/** Block-7 beat on thisNode via MASTER multicast (not a layout sensor). */
-static void hbloopSendBeat(lcos_layout *layout) {
-  if (layout == NULL) {
-    return;
-  }
-  s_hbloop_level = s_hbloop_level ? (byte)0 : (byte)1;
-  layout->sendShortMessage(true, 0, ETYPE_OPERATING, EVENT_BLOCK,
-    (byte)HBLOOP_BLOCK_INDEX, s_hbloop_level, 0, 0);
-  layout->update();
-}
-
-bool mqtt_bridge_is_hbloop_event(const DATAGRAM *pkt) {
-  if (pkt == NULL || pkt->event != EVENT_BLOCK || pkt->data0 != (byte)HBLOOP_BLOCK_INDEX) {
-    return false;
-  }
-  extern lcos_layout *layout;
-  if (layout == NULL) {
-    return false;
-  }
-  return pkt->source_node == layout->getNetworkObject()->getNodeID();
-}
-
-void mqtt_bridge_note_operation_event(const DATAGRAM *pkt) {
-  if (!mqtt_bridge_is_hbloop_event(pkt)) {
-    return;
-  }
-  /* Quiet token for sync-watch; host must not MQTT-publish 1507 to Digicon. */
-  Serial.println(F("HBLOOP ECHO"));
 }
 
 static void pollSerialTextLineForAck(lcos_layout *layout) {
@@ -381,8 +341,6 @@ static void pollSerialTextLineForAck(lcos_layout *layout) {
           Serial.println(F("RESUBSCRIBE start"));
           mqtt_bridge_setup_subscriptions(layout, layout->getNetworkObject()->getNodeID());
           Serial.println(F("RESUBSCRIBE sent"));
-        } else if (layout != NULL && strcmp(s_serialLineBuf, HBLOOP_TOKEN) == 0) {
-          /* USB ACK only — no radio. Multicast Block beats were stressing MASTER. */
         }
         /* PING / unknown text: ACK already printed — no radio / no turnout. */
       }
