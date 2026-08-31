@@ -110,12 +110,21 @@ class gateway;
 
 #define MQTT_BRIDGE_SYS_ID "LCOS MQTT bridge (JMRI) — IH set + signalmast status"
 
+/* Bridge-node Block index used only for MASTER distributor heartbeat (HBLOOP). Not a layout sensor. */
+#ifndef HBLOOP_BLOCK_INDEX
+#define HBLOOP_BLOCK_INDEX 7
+#endif
+
 /**
- * LCOS radio subscriptions (event 125) for display nodes 0,1,2,3,4,12,13.
+ * LCOS radio subscriptions (event 125) for display nodes 1,2,3,4,12,13 (not self).
  * Called from setup() and again when the host sends serial text "RESUBSCRIBE".
  */
 void mqtt_bridge_setup_subscriptions(lcos_layout *layout, uint16_t sourceNode);
 void mqtt_bridge_poll_serial(lcos_layout *layout, LCMNetwork *net, gateway *serial_gw);
 void mqtt_bridge_print_subscription_result(const DATAGRAM *pkt);
+/** True for our HBLOOP beat echo — host must not MQTT-publish these. */
+bool mqtt_bridge_is_hbloop_event(const DATAGRAM *pkt);
+/** Print quiet serial marker "HBLOOP ECHO" when distributor returns our beat. */
+void mqtt_bridge_note_operation_event(const DATAGRAM *pkt);
 
 #endif

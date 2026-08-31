@@ -20,7 +20,7 @@ Nano resets. The Python process often keeps a dead handle until reopen.
 | Probe | Serial line | Proves |
 |-------|-------------|--------|
 | USB ping | `PING` | Nano text stack alive (`ACK PING`) — **no radio, no turnout** |
-| Resubscribe | `RESUBSCRIBE` | Re-emits event 125 to display nodes **0**,1,2,3,4,12,13; watch `Subscription accepted - node: …` |
+| Resubscribe | `RESUBSCRIBE` | Re-emits event 125 to display nodes 1,2,3,4,12,13 **+ self (015)**; watch `Subscription accepted` |
 | Turnout GET | `track/cmd/turnout/<packed> GET` | Field answers turnout **index** 0–7 on the wire; Digicon packs **UID 8–15** (`408`). Bridge maps both ways. |
 | Signal aspect GET | `track/signalhead/<packed> Get` | Field should publish `EVENT_SIGNAL` → MQTT `track/signalmast/…` (master Signal 0 = `32`) |
 | Track power status | `track/cmd/power/<district> GET` | MASTER should publish `EVENT_TRACK_POWER` → MQTT `track/power/<district>` |
@@ -28,11 +28,24 @@ Nano resets. The Python process often keeps a dead handle until reopen.
 
 ## Host recovery (`serial_to_mqtt.py`, `--sync-watch` default on)
 
-1. Periodic **USB `PING`** (12s). Quiet unless miss; missed `ACK PING` counts toward fail streak.
-2. Turnout **ACK miss** streak (≥3) → request **reopen COM** + **`RESUBSCRIBE`**.
-3. **SerialException** → reopen COM (DTR usually re-runs Nano `setup()` subscriptions).
-4. Nano **boot banner** → wait for `setup()` accepts; **`RESUBSCRIBE` only if thin** (avoids double).
-5. Cooldowns avoid recovery storms.
+1. Periodic **USB `PING`** (~12s). Quiet unless miss; missed `ACK PING` → reopen streak.
+2. Turnout **ACK miss** streak (≥3) → **reopen COM** + **`RESUBSCRIBE`**.
+3. **SerialException** → reopen COM (DTR re-runs Nano `setup()` subscriptions).
+4. **Subscriptions / HBLOOP status** (stderr always):
+   - `sync: subscriptions complete (1,2,3,4,12,13)` when plant event-125 accepts land
+     (self **015** is also subscribed for the HB echo; MASTER often never prints accept for self)
+   - `sync: HBLOOP established` / `lost` / `recovered`
+   - **HBLOOP probe (5s):** host sends serial `HBLOOP` → Nano broadcasts Block-7 on node
+     **015**. With self subscribed, distributor should return the beat → serial
+     **`HBLOOP ECHO`** (and would-be `track/sensor/1507`, suppressed from Digicon).
+     No echo within the interval → `HBLOOP miss (n/3)`. **Layout**
+     `track/sensor/*` / `track/signalmast/*` does **not** clear HB — only ECHO/1507 does.
+     **3 misses (~15s)** → **`RESUBSCRIBE`**.
+   - Manual **`RESUBSCRIBE`** while enrolled is skipped unless **`RESUBSCRIBE FORCE`**.
+   - After MASTER power-cycle with the bridge left up: wait for miss→RESUBSCRIBE, or
+     send **`RESUBSCRIBE FORCE`**, or restart the bridge.
+5. Turnout **SET/TOGGLE** does not push `EVENT_TURNOUT` on this plant — firmware follows SET
+   with a **GET** so `track/turnout/…` updates. Block sensors still need distributor events.
 
 Disable with `--no-sync-watch`.
 
