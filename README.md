@@ -16,7 +16,7 @@ JMRI  ←→  MQTT broker  ←→  serial_to_mqtt.py  ←→  USB serial  ←→
 
 | Piece | Role |
 |-------|------|
-| **`LCOS_ESP32_MQTT_Client.ino`** + **`lcos_mqtt_bridge.*`** + **`mqtt_serial.*`** | Nano firmware: event-125 subscriptions, LCOS ↔ MQTT text lines |
+| **`lcos-bridge.ino`** + **`lcos_mqtt_bridge.*`** + **`mqtt_serial.*`** | Nano firmware: event-125 subscriptions, LCOS ↔ MQTT text lines |
 | **`serial_to_mqtt.py`** | PC: USB serial ↔ broker; sync-watch; optional signalhead forward; SML mode guard |
 | **MQTT broker** | Shared bus (Mosquitto, etc.) that JMRI also uses |
 
@@ -46,7 +46,7 @@ packed = displayNode * 100 + UID
 
 ## 1. Configure and flash the Nano
 
-Edit **`LCOS_ESP32_MQTT_Client.ino`**:
+Edit **`lcos-bridge.ino`**:
 
 - `channel` — must match your LCOS RF channel  
 - `thisNode` — this Nano’s LCOS node id (octal literal, e.g. `015`)
@@ -140,7 +140,7 @@ Without that script, the Nano + Python bridge still works for MQTT turnouts/sens
 
 | Path | Purpose |
 |------|---------|
-| `LCOS_ESP32_MQTT_Client.ino` | Sketch entry (`channel`, `thisNode`) |
+| `lcos-bridge.ino` | Sketch entry (`channel`, `thisNode`) — folder name must match for Arduino IDE |
 | `lcos_mqtt_bridge.cpp` / `.h` | Serial text, subscriptions, `RESUBSCRIBE` / `PING` |
 | `mqtt_serial.cpp` / `.h` | LCOS events → `track/…` lines |
 | `serial_to_mqtt.py` | Host bridge |

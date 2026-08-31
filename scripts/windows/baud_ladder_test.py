@@ -21,7 +21,7 @@ except ImportError:
     sys.exit(1)
 
 ROOT = Path(__file__).resolve().parents[2]
-INO = ROOT / "LCOS_ESP32_MQTT_Client.ino"
+INO = ROOT / "lcos-bridge.ino"
 AGENT = ROOT / "serial_to_mqtt.py"
 COM = "COM3"
 # Conservative → aggressive. 2M often works on CH340; included last.

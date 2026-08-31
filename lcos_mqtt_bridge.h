@@ -1,7 +1,7 @@
 /**
  * LCOS JMRI/MQTT bridge — subscriptions, serial text/binary routing, heartbeat command.
  * Target board for this project: Arduino Nano (repo/folder name may still say ESP32).
- * Keep LCOS_ESP32_MQTT_Client.ino aligned with reference/LCOS_Client_Bare.ino (Beagle Bay v1.10); customize here.
+ * Keep lcos-bridge.ino aligned with reference/LCOS_Client_Bare.ino (Beagle Bay v1.10); customize here.
  */
 #ifndef LCOS_MQTT_BRIDGE_H
 #define LCOS_MQTT_BRIDGE_H
