@@ -929,10 +929,13 @@ class SerialSyncWatchdog:
         """Hide verbose ACK RESUBSCRIBE / enroll chatter for HBLOOP auto retries.
 
         Manual MQTT RESUBSCRIBE (and other non-hbloop reasons) still echo.
+        Uses pending or last-sent reason so ACK is quiet even before mark_sent.
         """
         with self._lock:
-            reason = self._last_sent_resubscribe_reason
-            return reason.startswith("hbloop-") or bool(self._hbloop_60s_quiet)
+            reason = self._last_sent_resubscribe_reason or self._resubscribe_reason
+            if reason.startswith("hbloop-"):
+                return True
+            return bool(self._hbloop_60s_quiet)
 
     def take_reopen_request(self) -> str | None:
         with self._lock:
