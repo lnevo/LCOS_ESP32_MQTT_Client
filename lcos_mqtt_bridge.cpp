@@ -314,7 +314,7 @@ static void subscribeToNode(LCMNetwork *net, uint16_t sourceNode, uint16_t targe
   out.to_node = 0;
   out.event_type = ETYPE_OPERATING;
   out.event = 125;
-  /* Bare-client layout (mask data0–1, target data2–3). Also fill subscriber data4–5 per Public API. */
+  /* Public API Subscribe to Status (0x7d): mask data0–1, target data2–3, subscriber data4–5. */
   out.data0 = highByte(eventMask);
   out.data1 = lowByte(eventMask);
   out.data2 = highByte(targetNode);
@@ -382,8 +382,12 @@ static void pollSerialTextLineForAck(lcos_layout *layout) {
           mqtt_bridge_setup_subscriptions(layout, layout->getNetworkObject()->getNodeID());
           Serial.println(F("RESUBSCRIBE sent"));
         } else if (layout != NULL && strcmp(s_serialLineBuf, HBLOOP_TOKEN) == 0) {
-          /* Beat only — do not re-emit event-125 here (that is RESUBSCRIBE / setup). */
+          /* Re-assert self then beat — distributor echo => HBLOOP ECHO / 1507. */
+          uint16_t me = layout->getNetworkObject()->getNodeID();
+          subscribeToNode(layout->getNetworkObject(), me, me, SUBSCRIBE_EVENT_MASK);
+          layout->update();
           hbloopSendBeat(layout);
+          Serial.println(F("HBLOOP beat"));
         }
         /* PING / unknown text: ACK already printed — no radio / no turnout. */
       }

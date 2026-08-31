@@ -57,7 +57,9 @@ void setup() {
   Serial.println(F(">"));
 
   layout->update();
-  mqtt_bridge_setup_subscriptions(layout, thisNode);
+  /* Do not event-125 here. Opening the host COM often DTR-resets the Nano; re-subscribing
+   * on every agent restart was knocking MASTER's distributor into a bad state.
+   * Host probes HBLOOP first; RESUBSCRIBE only if the echo is missing. */
 }
 
 void loop(){
