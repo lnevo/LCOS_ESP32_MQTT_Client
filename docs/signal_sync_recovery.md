@@ -41,7 +41,8 @@ Nano resets. The Python process often keeps a dead handle until reopen.
      No echo within the interval → `HBLOOP miss (n/3)`. **Layout**
      `track/sensor/*` / `track/signalmast/*` does **not** clear HB — only ECHO/1507 does.
      **3 misses (~15s)** → **`RESUBSCRIBE`**.
-   - Manual **`RESUBSCRIBE`** while enrolled is skipped unless **`RESUBSCRIBE FORCE`**.
+   - Manual **`RESUBSCRIBE`** while HBLOOP is running is skipped unless
+     **`RESUBSCRIBE FORCE`**. Cooldown between RESUBSCRIBE attempts: **15s**.
    - After MASTER power-cycle with the bridge left up: wait for miss→RESUBSCRIBE, or
      send **`RESUBSCRIBE FORCE`**, or restart the bridge.
 5. Turnout **SET/TOGGLE** does not push `EVENT_TURNOUT` on this plant — firmware follows SET

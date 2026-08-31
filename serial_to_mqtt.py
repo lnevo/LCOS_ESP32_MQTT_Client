@@ -22,7 +22,7 @@ Host -> bridge ops (not retained): payload RESUBSCRIBE | RESUBSCRIBE FORCE | REO
 PING | HBLOOP on track/bridge/cmd. Sync-watch (default on): USB PING for COM health;
 track event-125 accepts → subscriptions complete / HBLOOP established|lost|recovered.
 HBLOOP every 5s (Block-7 beat → ECHO/1507; 3 misses → RESUBSCRIBE). Layout traffic
-does not clear HB. Manual RESUBSCRIBE skipped while enrolled unless FORCE.
+does not clear HB. Manual RESUBSCRIBE skipped while HBLOOP running unless FORCE (cooldown 15s).
 
 Digicon SML guard (track/bridge/sml_mode): on bridge start (and JMRI track/state
 OFFLINE), only if retained/last sml_mode is **enabled**, publish "query". A live Digicon
@@ -125,7 +125,7 @@ _SUBSCRIPTION_ACCEPT_RE = re.compile(
 _SUBSCRIPTION_DECLINE_RE = re.compile(
     r"^Subscription declined - node:\s*([0-7]+)\s*$"
 )
-SYNC_RESUBSCRIBE_COOLDOWN_SEC = 45.0
+SYNC_RESUBSCRIBE_COOLDOWN_SEC = 15.0
 SYNC_REOPEN_COOLDOWN_SEC = 20.0
 # Keep in sync with kSubscribeDisplayNodes[] in lcos_mqtt_bridge.cpp (+ self 015).
 # Values are the OCT strings firmware prints after "Subscription accepted - node: ".
@@ -758,15 +758,18 @@ class SerialSyncWatchdog:
         now = time.monotonic()
         cd = self.resubscribe_cooldown_sec if cooldown_sec is None else cooldown_sec
         with self._lock:
-            # Already enrolled: skip unless this is loss-recovery or an explicit FORCE.
-            if (
-                not force
-                and not mark_lost
-                and self._subs_complete
+            # Loop healthy: skip intentional refresh unless FORCE. Loss recovery
+            # (mark_lost=True / miss→RESUBSCRIBE) always proceeds past this gate.
+            loop_running = (
+                self._subs_complete
                 and self._hbloop_established
-            ):
+                and not self._hbloop_recovering
+                and self._hbloop_fails == 0
+                and self._seen_hbloop_echo
+            )
+            if not force and not mark_lost and loop_running:
                 print(
-                    "sync: RESUBSCRIBE skipped (already enrolled — use FORCE to re-send)",
+                    "sync: RESUBSCRIBE skipped (HBLOOP running — use FORCE to re-send)",
                     file=sys.stderr,
                 )
                 return False
@@ -875,6 +878,16 @@ class SerialSyncWatchdog:
                 file=sys.stderr,
             )
         if trigger:
+            with self._lock:
+                seen_echo = self._seen_hbloop_echo
+            if not seen_echo:
+                # Do not storm RESUBSCRIBE when MASTER never echoes self (no node-15 accept).
+                print(
+                    "sync: HBLOOP echo never seen — not RESUBSCRIBE "
+                    "(self-sub/1507 path down; plants still enrolled)",
+                    file=sys.stderr,
+                )
+                return False
             self.request_resubscribe(
                 f"hbloop-miss-{fails}",
                 cooldown_sec=0.0,
