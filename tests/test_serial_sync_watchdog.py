@@ -110,6 +110,24 @@ class TestSerialSyncWatchdog(unittest.TestCase):
         self.assertIsNone(w.take_resubscribe_request())
         self.assertFalse(w._hbloop_monitor_armed)
 
+    def test_plain_resubscribe_blocked_when_hbloop_established(self) -> None:
+        w = SerialSyncWatchdog(
+            enabled=True,
+            hbloop_enabled=True,
+            hbloop_interval_sec=0.0,
+            resubscribe_cooldown_sec=0.0,
+        )
+        w.maybe_queue_hbloop_probe()
+        w.note_hbloop_echo("echo")
+        self.assertTrue(w.hbloop_is_established())
+        # Mirror MQTT handler: refuse plain when established.
+        self.assertTrue(w.hbloop_is_established())
+        # FORCE path still queues.
+        self.assertTrue(
+            w.request_resubscribe("mqtt-force", force=True, reset_hbloop_budget=True)
+        )
+        self.assertEqual(w.take_resubscribe_request(), "mqtt-force")
+
     def test_disabled_noop(self) -> None:
         w = SerialSyncWatchdog(enabled=False, ack_fail_limit=1, hbloop_enabled=False)
         w.note_turnout_ack(False)

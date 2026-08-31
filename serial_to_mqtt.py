@@ -19,10 +19,9 @@ On MQTT connect we publish BRIDGE_STATUS_ONLINE to track/bridge/status (retained
 publish BRIDGE_STATUS_OFFLINE (best-effort before disconnect).
 
 Host -> bridge ops (not retained): payload RESUBSCRIBE | RESUBSCRIBE FORCE | REOPEN | PING | HBLOOP on
-track/bridge/cmd. Manual MQTT RESUBSCRIBE always fires (no cooldown); FORCE is an alias.
-HBLOOP monitor (default on with sync-watch): serial Block-7 beat → expect HBLOOP ECHO; on
-lost after established, one auto-RESUBSCRIBE; if echo still missing, disarm for manual
-MQTT RESUBSCRIBE.
+track/bridge/cmd. Plain MQTT RESUBSCRIBE is refused while HBLOOP is established (use FORCE);
+when not established it fires with no cooldown. HBLOOP lost after established: one
+auto-RESUBSCRIBE; if echo still missing, disarm for manual MQTT RESUBSCRIBE.
 Auto sync-watch RESUBSCRIBE (USB/boot thin-accept) still uses cooldown to avoid storms.
 (see docs/archive/manual_resubscribe_hbloop_era.md).
 
@@ -731,11 +730,16 @@ class SerialSyncWatchdog:
             self._reopen_reason = reason
             self._last_reopen_mono = now
 
+    def hbloop_is_established(self) -> bool:
+        with self._lock:
+            return bool(self._hbloop_established)
+
     def request_resubscribe(
         self, reason: str, *, force: bool = False, reset_hbloop_budget: bool = False
     ) -> bool:
-        """Queue RESUBSCRIBE. force=True bypasses cooldown (manual lab / RESUBSCRIBE FORCE).
+        """Queue RESUBSCRIBE.
 
+        force=True: bypass cooldown (MQTT FORCE, HBLOOP auto-lost, etc.).
         reset_hbloop_budget=True (manual MQTT): clear the one-shot auto-RESUBSCRIBE flag
         so a later MASTER reboot can auto-recover once again.
         """
@@ -1179,10 +1183,21 @@ def main() -> int:
             except Exception:
                 return
             if body == "RESUBSCRIBE" or body == "RESUBSCRIBE FORCE":
-                # Manual MQTT path: always fire (no cooldown) so MASTER reboot
-                # recovery does not require restarting the agent.
+                want_force = body.endswith("FORCE")
+                # While HBLOOP is healthy, refuse plain RESUBSCRIBE (avoids fouling MASTER).
+                # FORCE always allowed. When not established, plain RESUBSCRIBE still has
+                # no cooldown (force=True on the queue path).
+                if not want_force and sync_watch.hbloop_is_established():
+                    print(
+                        "sync: MQTT RESUBSCRIBE ignored "
+                        "(HBLOOP established - use RESUBSCRIBE FORCE)",
+                        file=sys.stderr,
+                    )
+                    return
                 if sync_watch.request_resubscribe(
-                    "mqtt-bridge-cmd", force=True, reset_hbloop_budget=True
+                    "mqtt-bridge-cmd",
+                    force=True,
+                    reset_hbloop_budget=True,
                 ):
                     print("sync: MQTT track/bridge/cmd RESUBSCRIBE queued")
             elif body == "PING":

@@ -41,7 +41,10 @@ Ghost Digicon topic `track/sensor/1507` is never published.
 2. Turnout **ACK miss** streak (≥3) → **reopen COM** (DTR) + **`RESUBSCRIBE`**.
 3. **SerialException** → reopen COM (DTR re-runs Nano `setup()` plant enroll).
 4. After Nano boot (DTR path only): wait for plant accepts; **thin accept** after grace → one **`RESUBSCRIBE`**.
-5. Manual MQTT `track/bridge/cmd`: **`RESUBSCRIBE`** (no cooldown) / **`REOPEN`** / **`PING`** / **`HBLOOP`**.
+5. Manual MQTT `track/bridge/cmd`:
+   - **`RESUBSCRIBE`** — only if HBLOOP is **not** established (no cooldown)
+   - **`RESUBSCRIBE FORCE`** — always (no cooldown), even while healthy
+   - **`REOPEN`** / **`PING`** / **`HBLOOP`**
 6. HBLOOP: miss → lost → **one** auto-`RESUBSCRIBE`; if no re-establish, disarm for manual.
 
 ## Firmware
