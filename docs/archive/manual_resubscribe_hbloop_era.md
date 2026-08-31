@@ -16,8 +16,8 @@ auto-`RESUBSCRIBE` loops that fouled MASTER. Pre-HBLOOP behavior:
 
 | MQTT `track/bridge/cmd` | Effect |
 |-------------------------|--------|
-| `RESUBSCRIBE` | Re-emit event 125 (45s cooldown) |
-| `RESUBSCRIBE FORCE` | Same, bypasses cooldown |
+| `RESUBSCRIBE` | Re-emit event 125 (no cooldown on this MQTT path) |
+| `RESUBSCRIBE FORCE` | Same as `RESUBSCRIBE` (alias) |
 | `REOPEN` | Reopen COM (Nano `setup()` will enroll again) |
 | `PING` | USB-only ping |
 

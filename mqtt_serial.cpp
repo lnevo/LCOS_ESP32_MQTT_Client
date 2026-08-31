@@ -61,11 +61,20 @@ const char *sensorStateToPayload(byte data1) {
 }
 
 const char *powerStateToPayload(byte data1) {
-  return data1 == 0 ? "OFF" : "ON";
+  /* Public API track power: 0=off, 1=normal, 2=reversed. JMRI MQTT uses OFF/ON. */
+  if (data1 == 0) {
+    return "OFF";
+  }
+  if (data1 == 2) {
+    return "REVERSE";
+  }
+  return "ON";
 }
 
-// --- Signal mast (EVENT_SIGNAL 0x3 status, EVENT_SIGNAL_CMD 0x11 command; UID_OFFSET_SIGNALS 32.)
-// lcos.h: SIGNAL_STOP 1, SIGNAL_APPROACH 2, SIGNAL_CLEAR 3, SIGNAL_OFF 4. Legacy packets may still use 0.
+// --- Signal mast (EVENT_SIGNAL 0x3 status, EVENT_SIGNAL_CMD 0x11 command.)
+// Public API / lcos.h: data0 = full UID (Signal 0 → 32 … 47). Do NOT add UID_OFFSET_SIGNALS again
+// (that produced MQTT …64 / 464 = Relay Obj 13). Packing: displayNode*100 + UID → node 4 Signal 0 = 432.
+// lcos.h aspects: SIGNAL_STOP 1, SIGNAL_APPROACH 2, SIGNAL_CLEAR 3, SIGNAL_OFF 4 (legacy 0 = Off).
 // JMRI expects "AspectName; Lit|Unlit; Held|Unheld" on track/signalmast/.
 static const char *signalMastAspectName(byte data1) {
   switch (data1) {
@@ -130,7 +139,7 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
   byte data1 = pkt->data1;
   byte data2 = pkt->data2;
 
-  if (debug && (event == EVENT_TURNOUT || event == EVENT_TURNOUT_CMD || event == EVENT_SIGNAL || event == EVENT_SIGNAL_CMD || event == EVENT_BLOCK || event == EVENT_BLOCK_CMD || event == EVENT_BUTTON || event == EVENT_SWITCH_CONTACT)) {
+  if (debug && (event == EVENT_TURNOUT || event == EVENT_TURNOUT_CMD || event == EVENT_SIGNAL || event == EVENT_SIGNAL_CMD || event == EVENT_BLOCK || event == EVENT_BLOCK_CMD || event == EVENT_BUTTON || event == EVENT_SWITCH_CONTACT || event == EVENT_CONTROL_CMD || event == EVENT_TRACK_POWER || event == EVENT_TRACK_PWR_CMD)) {
     debugOperationPayload(out, event, node, pkt->from_node, pkt->to_node, uid, data1, data2,
       pkt->data3, pkt->data4, pkt->data5, pkt->data6, pkt->cmd_response);
   }
@@ -138,23 +147,47 @@ void mqttPublishOperationEvent(Print &out, const DATAGRAM *pkt, bool debug) {
   char topic[32];
   const char *payload = nullptr;
   const char *prefix = nullptr;
-  byte topic_uid = uid;  // default: data0 is already full LCOS UID (e.g. turnouts 8–15)
+  byte topic_uid = uid;  // default: data0 is already full LCOS UID (turnouts 8–15, signals 32–47, relays 51–66)
 
   switch (event) {
     case EVENT_TURNOUT_CMD:
       /* Status (EVENT_TURNOUT) is authoritative for JMRI; CMD frames often carry non-UID data0 (e.g. 0x7F). */
       return;
     case EVENT_TURNOUT:
+      /* Field status data0 is turnout *index* 0–7; JMRI Digicon expects UID 8–15 (408 not 400). */
       prefix = MQTT_TOPIC_TURNOUT;
       payload = turnoutStateToPayload(data1);
+      if (uid < (byte)UID_OFFSET_TURNOUTS) {
+        topic_uid = (byte)(uid + (byte)UID_OFFSET_TURNOUTS);
+      }
       break;
-    case EVENT_SIGNAL:
     case EVENT_SIGNAL_CMD:
+      /* Status (EVENT_SIGNAL) is authoritative; CMD frames often carry non-UID data0 (e.g. 0x7F)
+       * and were publishing bogus track/signalmast/559 etc. Mirror EVENT_TURNOUT_CMD. */
+      return;
+    case EVENT_SIGNAL:
       prefix = MQTT_TOPIC_SIGNALMAST;
       payload = signalMastStateToPayload(data1);
-      /* lcos.h: UID_OFFSET_SIGNALS 32 (range 32–47). data0 = uid or index not defined in library; we use offset+data0. */
-      topic_uid = UID_OFFSET_SIGNALS + uid;
+      /* data0 is full signal UID (32–47). */
+      topic_uid = uid;
       break;
+    case EVENT_CONTROL_CMD:
+      /* Do not MQTT-publish control CMDs; optional status echo is printed by the bridge after send. */
+      return;
+    case EVENT_TRACK_PWR_CMD:
+      /* Status (EVENT_TRACK_POWER) is authoritative. */
+      return;
+    case EVENT_TRACK_POWER:
+      /* Public API: data0 = district ID; data1 = 0 off / 1 normal / 2 reversed.
+       * Publish track/power/<district> (source node not packed — power is district-scoped). */
+      payload = powerStateToPayload(data1);
+      {
+        int n = snprintf(topic, sizeof(topic), "%s/%u", MQTT_TOPIC_POWER, (unsigned)uid);
+        if (n > 0 && (size_t)n < sizeof(topic) && payload) {
+          mqttPublish(out, topic, payload);
+        }
+      }
+      return;
     case EVENT_BLOCK:
     case EVENT_BLOCK_CMD:
     case EVENT_BUTTON:
