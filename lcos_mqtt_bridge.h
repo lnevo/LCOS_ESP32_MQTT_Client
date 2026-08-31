@@ -72,48 +72,18 @@ class gateway;
  * `data1` (after `data0` = UID). Alignment (`ALIGN_*`) or aspect (`SIGNAL_*`) goes in `data2`. Last
  * `sendShortMessage` argument = 0 for a new command (not a response).
  *
- * Turnout (Public API + maintainer notes): 1=get, 2=set w/o lock, 3=set w/ lock, 0x7F=release.
- * Signal (Public API Events-Operating row): 1=GET aspect, 2=set aspect, 3=RELEASE
- * (signal RELEASE is 0x03, not turnout's 0x7F). Stock `lcos.h` does not define these names.
+ * **Source:** Beagle Bay LCOS operating API — same numeric values as the “Command requests” table in
+ * this repo’s README.md (*CTC Functions → LCOS API*). Stock `lcos.h` from the author does not define
+ * these names; they are provided here only for this MQTT bridge sketch. You may use the hex literals
+ * directly (0x01, 0x02, …) if you prefer not to depend on this header.
  */
 #define LCOS_CMD_GET_STATE            0x01
 #define LCOS_CMD_SET_STATE_NO_LOCK    0x02
 #define LCOS_CMD_SET_STATE_WITH_LOCK  0x03
 #define LCOS_CMD_RELEASE_LOCK         0x7F
-/* Signal-specific aliases (same numeric GET/SET; RELEASE differs from turnout). */
-#define LCOS_SIGNAL_CMD_GET           0x01
-#define LCOS_SIGNAL_CMD_SET           0x02
-#define LCOS_SIGNAL_CMD_RELEASE       0x03
-/*
- * Custom / relay objects (EVENT_CONTROL_CMD 0x14). Public API: data1 1=Set Auto, 3=do option,
- * 0x7F=RELEASE; data2 = option. We treat option 0=OFF, 1=ON for Relay Obj lamps.
- */
-#define LCOS_CONTROL_CMD_DO_OPTION    0x03
-#define LCOS_RELAY_OPTION_OFF         0
-#define LCOS_RELAY_OPTION_ON          1
-/*
- * Track power (EVENT_TRACK_PWR_CMD 0x15). Public API: data0 = district 0–127;
- * data1 1=status request, 2=set state, 0x7F=RELEASE; data2 0=off, 1=normal, 2=reversed.
- */
-#define LCOS_TRACK_PWR_CMD_GET        0x01
-#define LCOS_TRACK_PWR_CMD_SET        0x02
-#define LCOS_TRACK_PWR_CMD_RELEASE    0x7F
-#define LCOS_TRACK_PWR_OFF            0
-#define LCOS_TRACK_PWR_NORMAL         1
-#define LCOS_TRACK_PWR_REVERSED       2
 
-/* After IH SIGNAL_CMD set, also emit track/signalmast/<packed> aspect report (JMRI receive path).
- * 1 = default on; set 0 to rely only on field EVENT_SIGNAL status frames. */
-#ifndef MQTT_PUBLISH_SIGNALMAST_ON_SET
-#define MQTT_PUBLISH_SIGNALMAST_ON_SET 0
-#endif
+#define MQTT_BRIDGE_SYS_ID "LCOS MQTT bridge (JMRI) — subscriptions to nodes 4, 3, 13"
 
-#define MQTT_BRIDGE_SYS_ID "LCOS MQTT bridge (JMRI) — IH set + signalmast status"
-
-/**
- * LCOS radio subscriptions (event 125) for display nodes 0,1,2,3,4,12,13.
- * Called from setup() and again when the host sends serial text "RESUBSCRIBE".
- */
 void mqtt_bridge_setup_subscriptions(lcos_layout *layout, uint16_t sourceNode);
 void mqtt_bridge_poll_serial(lcos_layout *layout, LCMNetwork *net, gateway *serial_gw);
 void mqtt_bridge_print_subscription_result(const DATAGRAM *pkt);

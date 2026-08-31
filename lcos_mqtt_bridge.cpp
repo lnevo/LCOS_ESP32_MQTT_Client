@@ -46,239 +46,16 @@ static void handleTurnoutCmdFromSerialLine(lcos_layout *layout, const char *rest
   uint16_t jmriNode = (uint16_t)(packed_ul / 100u);
   uint16_t lcosNode = mqttDisplayNodeToLcosNode(jmriNode);
   byte uid = (byte)(packed_ul % 100u);
-
-  /* Relay Obj band (51–66): JMRI MQTT turnout → EVENT_CONTROL_CMD (not TURNOUT_CMD).
-   * Packing matches working turnouts: packed=displayNode*100+UID, displayNode digits→octal RF24.
-   * e.g. 452 → jmriN=4 → lcos=04, UID=52 (Relay Obj 1). Field ACKs use cr=UID.
-   * data1/data2: use same "set" request byte as turnouts (0x02) with data2=0/1 off/on.
-   * (Public API custom-object row also lists 3=do option — Robin may clarify.) */
-  if (uid >= (byte)UID_OFFSET_RELAYS && uid < (byte)UID_OFFSET_CONTROL_OBJECTS) {
-    if (streq_ci(end, "GET") || streq_ci(end, "QUERY")) {
-      /* Same GET request byte as turnouts; field may publish EVENT_CONTROL / status. */
-      layout->sendShortMessage(false, lcosNode, ETYPE_OPERATING, EVENT_CONTROL_CMD,
-        uid, LCOS_CMD_GET_STATE, 0, 0);
-      layout->update();
-      return;
-    }
-    byte option;
-    if (streq_ci(end, "THROWN") || streq_ci(end, "ON")) {
-      option = (byte)LCOS_RELAY_OPTION_ON;
-    } else if (streq_ci(end, "CLOSED") || streq_ci(end, "OFF")) {
-      option = (byte)LCOS_RELAY_OPTION_OFF;
-    } else {
-      return;
-    }
-    Serial.print(F("DBG RELAY packed="));
-    Serial.print((unsigned)packed_ul);
-    Serial.print(F(" jmriN="));
-    Serial.print(jmriNode);
-    Serial.print(F(" lcosN="));
-    Serial.print(lcosNode);
-    Serial.print(F(" oct="));
-    Serial.print(lcosNode, OCT);
-    Serial.print(F(" uid="));
-    Serial.print((int)uid);
-    Serial.print(F(" set="));
-    Serial.print((int)LCOS_CMD_SET_STATE_NO_LOCK);
-    Serial.print(F(" d2="));
-    Serial.println((int)option);
-    layout->sendShortMessage(false, lcosNode, ETYPE_OPERATING, EVENT_CONTROL_CMD,
-      uid, LCOS_CMD_SET_STATE_NO_LOCK, option, 0);
-    layout->update();
-    /* Local echo for JMRI MONITORING beans — not proof the MASTER acted. */
-    char topic[32];
-    mqttTopicWithPackedAddress(topic, sizeof(topic), MQTT_TOPIC_TURNOUT, lcosNode, uid);
-    mqttPublish(Serial, topic, option == LCOS_RELAY_OPTION_ON ? "THROWN" : "CLOSED");
-    return;
-  }
-
-  /* JMRI Digicon packs turnout N as displayNode*100+(8+N) → 408.
-   * Field quirk (lab): GET/status uses data0 = *index* 0–7; SET goto uses data0 = *UID* 8–15.
-   * Accept MQTT 400 or 408; map each command type to the wire form that works. */
-  byte wire_uid;
-  if (uid >= (byte)UID_OFFSET_TURNOUTS && uid < (byte)UID_OFFSET_ROUTES) {
-    /* Digicon form 408…415 */
-    wire_uid = uid; /* SET default: full UID */
-  } else if (uid < (byte)UID_OFFSET_TURNOUTS) {
-    /* Index form 400…407 */
-    wire_uid = (byte)(uid + (byte)UID_OFFSET_TURNOUTS); /* SET default: full UID */
-  } else {
-    return;
-  }
-  byte wire_index = (byte)(wire_uid - (byte)UID_OFFSET_TURNOUTS);
-
   byte align;
   if (streq_ci(end, "CLOSED")) {
     align = (byte)ALIGN_CLOSED;
   } else if (streq_ci(end, "THROWN")) {
     align = (byte)ALIGN_THROWN;
-  } else if (streq_ci(end, "TOGGLE")) {
-    align = (byte)ALIGN_TOGGLE;
-  } else if (streq_ci(end, "GET") || streq_ci(end, "QUERY")) {
-    /* Status request: field wants index 0–7 (400 answers; 408 did not). */
-    layout->sendShortMessage(false, lcosNode, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
-      wire_index, LCOS_CMD_GET_STATE, 0, 0);
-    layout->update();
-    return;
   } else {
     return;
   }
-  /* Set alignment: field wants full turnout UID 8–15. */
   layout->sendShortMessage(false, lcosNode, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
-    wire_uid, LCOS_CMD_SET_STATE_NO_LOCK, align, 0);
-  layout->update();
-}
-
-/* JMRI Virtual head: track/signalhead/<packed> Red|Yellow|Green|… (optional legacy IH prefix). */
-#define SIGNALHEAD_PREFIX "track/signalhead/"
-#define SIGNALHEAD_PREFIX_LEN (sizeof(SIGNALHEAD_PREFIX) - 1)
-
-/**
- * Map appearance name → LCOS SIGNAL_* for EVENT_SIGNAL_CMD data2.
- * Red→Stop, Yellow→Approach, Green→Clear. Dark/Off→0.
- */
-static bool appearanceToLcosAspect(const char *name, byte *aspect_out) {
-  if (name == NULL || aspect_out == NULL || *name == '\0') {
-    return false;
-  }
-  if (streq_ci(name, "Red") || streq_ci(name, "FlashRed") || streq_ci(name, "Stop")) {
-    *aspect_out = (byte)SIGNAL_STOP;
-    return true;
-  }
-  if (streq_ci(name, "Yellow") || streq_ci(name, "FlashYellow") || streq_ci(name, "Lunar")
-      || streq_ci(name, "FlashLunar") || streq_ci(name, "Approach")) {
-    *aspect_out = (byte)SIGNAL_APPROACH;
-    return true;
-  }
-  if (streq_ci(name, "Green") || streq_ci(name, "FlashGreen") || streq_ci(name, "Clear")) {
-    *aspect_out = (byte)SIGNAL_CLEAR;
-    return true;
-  }
-  if (streq_ci(name, "Dark") || streq_ci(name, "Off")) {
-    *aspect_out = 0;
-    return true;
-  }
-  return false;
-}
-
-/**
- * Wire UID for SIGNAL_CMD: data0 is the Public API signal UID (32–47).
- * Legacy remapped topics (…64–79 / IH464) still reverse to 32–47 for rollback testing.
- */
-static byte mqttSignalUidToWireData0(byte mqtt_uid) {
-  if (mqtt_uid >= (byte)(UID_OFFSET_SIGNALS * 2)
-      && mqtt_uid < (byte)(UID_OFFSET_SIGNALS * 2 + 16)) {
-    return (byte)(mqtt_uid - (byte)UID_OFFSET_SIGNALS);
-  }
-  return mqtt_uid;
-}
-
-static void sendSignalCmd(lcos_layout *layout, uint16_t lcosNode, byte wire_uid,
-                          byte cmd_req, byte aspect_or_zero) {
-  layout->sendShortMessage(false, lcosNode, ETYPE_OPERATING, EVENT_SIGNAL_CMD,
-    wire_uid, cmd_req, aspect_or_zero, 0);
-  layout->update();
-}
-
-static void handleSignalHeadCmdFromSerialLine(lcos_layout *layout, const char *rest) {
-  if (layout == NULL || rest == NULL) {
-    return;
-  }
-  /* Topic suffix is packed digits; accept optional legacy "IH" prefix. */
-  const char *num = rest;
-  if ((num[0] == 'I' || num[0] == 'i') && (num[1] == 'H' || num[1] == 'h')) {
-    num += 2;
-  }
-  char *end = NULL;
-  unsigned long packed_ul = strtoul(num, &end, 10);
-  if (end == num) {
-    return;
-  }
-  while (*end == ' ') {
-    end++;
-  }
-  if (*end == '\0') {
-    return;
-  }
-  uint16_t jmriNode = (uint16_t)(packed_ul / 100u);
-  uint16_t lcosNode = mqttDisplayNodeToLcosNode(jmriNode);
-  byte mqtt_uid = (byte)(packed_ul % 100u);
-  byte wire_uid = mqttSignalUidToWireData0(mqtt_uid);
-
-  /* Public API signal CMD: 1=GET, 2=set, 3=RELEASE. Explicit payloads for probes. */
-  if (streq_ci(end, "Release") || streq_ci(end, "Unheld")) {
-    sendSignalCmd(layout, lcosNode, wire_uid, LCOS_SIGNAL_CMD_RELEASE, 0);
-    return;
-  }
-  if (streq_ci(end, "Get") || streq_ci(end, "Query")) {
-    sendSignalCmd(layout, lcosNode, wire_uid, LCOS_SIGNAL_CMD_GET, 0);
-    return;
-  }
-
-  byte aspect;
-  if (!appearanceToLcosAspect(end, &aspect)) {
-    return;
-  }
-  /* Set aspect only (no auto-RELEASE). */
-  sendSignalCmd(layout, lcosNode, wire_uid, LCOS_SIGNAL_CMD_SET, aspect);
-#if MQTT_PUBLISH_SIGNALMAST_ON_SET
-  /* Optional optimistic mast echo (off while field EVENT_SIGNAL is SoR). */
-  {
-    char topic[32];
-    mqttTopicWithPackedAddress(topic, sizeof(topic), MQTT_TOPIC_SIGNALMAST, lcosNode, wire_uid);
-    mqttPublish(Serial, topic, signalMastStateToPayload(aspect));
-  }
-#endif
-}
-
-/* Track power: track/cmd/power/<district> GET|ON|OFF|NORMAL|REVERSE[D]
- * District is Public API data0 (0–127). Command is addressed to MASTER (display node 0). */
-#define CMD_POWER_PREFIX "track/cmd/power/"
-#define CMD_POWER_PREFIX_LEN (sizeof(CMD_POWER_PREFIX) - 1)
-
-static void handleTrackPowerCmdFromSerialLine(lcos_layout *layout, const char *rest) {
-  if (layout == NULL || rest == NULL) {
-    return;
-  }
-  char *end = NULL;
-  unsigned long district_ul = strtoul(rest, &end, 10);
-  if (end == rest || district_ul > 127u) {
-    return;
-  }
-  while (*end == ' ') {
-    end++;
-  }
-  if (*end == '\0') {
-    return;
-  }
-  byte district = (byte)district_ul;
-  uint16_t lcosMaster = mqttDisplayNodeToLcosNode(0);
-
-  if (streq_ci(end, "GET") || streq_ci(end, "QUERY")) {
-    layout->sendShortMessage(false, lcosMaster, ETYPE_OPERATING, EVENT_TRACK_PWR_CMD,
-      district, LCOS_TRACK_PWR_CMD_GET, 0, 0);
-    layout->update();
-    return;
-  }
-  if (streq_ci(end, "RELEASE")) {
-    layout->sendShortMessage(false, lcosMaster, ETYPE_OPERATING, EVENT_TRACK_PWR_CMD,
-      district, LCOS_TRACK_PWR_CMD_RELEASE, 0, 0);
-    layout->update();
-    return;
-  }
-
-  byte state;
-  if (streq_ci(end, "OFF")) {
-    state = (byte)LCOS_TRACK_PWR_OFF;
-  } else if (streq_ci(end, "ON") || streq_ci(end, "NORMAL")) {
-    state = (byte)LCOS_TRACK_PWR_NORMAL;
-  } else if (streq_ci(end, "REVERSE") || streq_ci(end, "REVERSED")) {
-    state = (byte)LCOS_TRACK_PWR_REVERSED;
-  } else {
-    return;
-  }
-  layout->sendShortMessage(false, lcosMaster, ETYPE_OPERATING, EVENT_TRACK_PWR_CMD,
-    district, LCOS_TRACK_PWR_CMD_SET, state, 0);
+    uid, LCOS_CMD_SET_STATE_NO_LOCK, align, 0);
   layout->update();
 }
 
@@ -286,15 +63,15 @@ static void handleTrackPowerCmdFromSerialLine(lcos_layout *layout, const char *r
 #define SUBSCRIBE_EVENT_MASK (INCLUDE_BLOCK_EVENTS | INCLUDE_TURNOUT_EVENTS | INCLUDE_SIGNAL_EVENTS \
   | INCLUDE_BUTTON_EVENTS | INCLUDE_SWITCH_EVENTS | INCLUDE_TRACK_POWER_EVENTS | INCLUDE_SENSOR_EVENTS)
 
-/* JMRI display nodes (decimal digit string of RF24 octal addr). Mapped via mqttDisplayNodeToLcosNode.
- * Keep in sync with SYNC_SUBSCRIBE_DISPLAY_NODES in serial_to_mqtt.py (boot thin-accept check). */
-static const uint16_t kSubscribeDisplayNodes[] = { 0, 1, 2, 3, 4, 12, 13 };
+/* JMRI display nodes (decimal digit string of RF24 octal addr). Mapped via mqttDisplayNodeToLcosNode. */
+static const uint16_t kSubscribeDisplayNodes[] = { 1, 2, 3, 4, 12, 13 };
 
-// --- Serial text from Python (serial_to_mqtt.py) ---
+// --- Serial text: heartbeat from Python (serial_to_mqtt.py) ---
 // Turnout line "track/cmd/turnout/<packed> ..." uses jmriNode*100+uid; mqttDisplayNodeToLcosNode() before sendShortMessage.
 // Turnout index 0 => UID UID_OFFSET_TURNOUTS+0 (8). Replies on MQTT use pkt.source_node from the wire, not dest.
-// Any non-empty text line gets "ACK <line>" first. PING is USB health only (no turnout / no radio).
-#define RESUBSCRIBE_TOKEN "RESUBSCRIBE"
+#define HB_SERIAL_TOKEN "PING"
+#define HB_TURNOUT_NODE 3
+#define HB_TURNOUT_UID 8
 
 static char s_serialLineBuf[128];
 static size_t s_serialLineLen = 0;
@@ -330,23 +107,16 @@ static void pollSerialTextLineForAck(lcos_layout *layout) {
         if (layout != NULL && strncmp(s_serialLineBuf, CMD_TURNOUT_PREFIX, CMD_TURNOUT_PREFIX_LEN) == 0
             && s_serialLineBuf[CMD_TURNOUT_PREFIX_LEN] != '\0') {
           handleTurnoutCmdFromSerialLine(layout, s_serialLineBuf + CMD_TURNOUT_PREFIX_LEN);
-        } else if (layout != NULL && strncmp(s_serialLineBuf, SIGNALHEAD_PREFIX, SIGNALHEAD_PREFIX_LEN) == 0
-            && s_serialLineBuf[SIGNALHEAD_PREFIX_LEN] != '\0') {
-          handleSignalHeadCmdFromSerialLine(layout, s_serialLineBuf + SIGNALHEAD_PREFIX_LEN);
-        } else if (layout != NULL && strncmp(s_serialLineBuf, CMD_POWER_PREFIX, CMD_POWER_PREFIX_LEN) == 0
-            && s_serialLineBuf[CMD_POWER_PREFIX_LEN] != '\0') {
-          handleTrackPowerCmdFromSerialLine(layout, s_serialLineBuf + CMD_POWER_PREFIX_LEN);
-        } else if (layout != NULL && strcmp(s_serialLineBuf, RESUBSCRIBE_TOKEN) == 0) {
-          /* Re-emit event 125 subscriptions (e.g. after MASTER reboot or lost distributor state). */
-          Serial.println(F("RESUBSCRIBE start"));
-          mqtt_bridge_setup_subscriptions(layout, layout->getNetworkObject()->getNodeID());
-          Serial.println(F("RESUBSCRIBE sent"));
+        } else if (layout != NULL && strcmp(s_serialLineBuf, HB_SERIAL_TOKEN) == 0) {
+          /* Unicast to the turnout owner: multicast=true only sends to master (00) per LCMNetwork::emitEvent. */
+          /* Turnout CMD: data1 = command request, data2 = ALIGN_*; see lcos_mqtt_bridge.h / README LCOS API table. */
+          layout->sendShortMessage(false, HB_TURNOUT_NODE, ETYPE_OPERATING, EVENT_TURNOUT_CMD,
+            (byte)HB_TURNOUT_UID, LCOS_CMD_SET_STATE_NO_LOCK, (byte)ALIGN_THROWN, 0);
+          layout->update();
         }
-        /* PING / unknown text: ACK already printed — no radio / no turnout. */
       }
       s_serialLineLen = 0;
-      /* Keep draining: Digicon often bursts several IH lines; one-per-call left them queued. */
-      continue;
+      return;
     }
     if (s_serialLineLen < sizeof(s_serialLineBuf) - 1) {
       s_serialLineBuf[s_serialLineLen++] = (uint8_t)ch;
