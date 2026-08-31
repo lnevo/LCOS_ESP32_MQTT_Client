@@ -66,6 +66,7 @@ import signal
 import sys
 import threading
 import time
+from collections.abc import Callable
 
 import serial
 import paho.mqtt.client as mqtt
@@ -156,6 +157,10 @@ BRIDGE_STATUS_ONLINE = "online"
 BRIDGE_STATUS_OFFLINE = "offline"
 # Host -> bridge ops (not retained): RESUBSCRIBE | PING | HBLOOP
 BRIDGE_CMD_TOPIC = "track/bridge/cmd"
+# Bridge-node HBLOOP health for JMRI panel lamp (node 15 / control UID 67).
+HBLOOP_STATUS_TOPIC = "track/sensor/1567"
+HBLOOP_STATUS_ACTIVE = "ACTIVE"
+HBLOOP_STATUS_INACTIVE = "INACTIVE"
 
 # JMRI -> bridge -> serial -> LCOS (distinct from state topic track/turnout/<packed>).
 CMD_TURNOUT_TOPIC = "track/cmd/turnout"
@@ -262,6 +267,24 @@ def _publish_bridge_status(
     except Exception as e:
         print(f"MQTT bridge status publish failed ({payload!r}): {e}", file=sys.stderr)
         return False
+
+
+def _publish_retained_sensor(
+    client: mqtt.Client,
+    topic: str,
+    payload: str,
+    *,
+    verbose: bool,
+) -> None:
+    """Retained sensor-style status (ACTIVE/INACTIVE) for JMRI MQTT sensors."""
+    try:
+        info = client.publish(topic, payload, qos=1, retain=True)
+        if hasattr(info, "wait_for_publish"):
+            info.wait_for_publish(timeout=5.0)
+        if verbose:
+            print(f"TX -> {topic} {payload}")
+    except Exception as e:
+        print(f"MQTT sensor status publish failed ({topic} {payload!r}): {e}", file=sys.stderr)
 
 
 class DigiconSmlGuard:
@@ -620,6 +643,7 @@ class SerialSyncWatchdog:
         hbloop_retry_sec: float = SYNC_HBLOOP_RETRY_SEC,
         feedback_hint_interval_sec: float = SYNC_HBLOOP_FEEDBACK_HINT_INTERVAL_SEC,
         verbose: bool = False,
+        hbloop_status_publish: Callable[[bool], None] | None = None,
     ) -> None:
         self.enabled = enabled
         self.ack_fail_limit = ack_fail_limit
@@ -635,6 +659,7 @@ class SerialSyncWatchdog:
         self.hbloop_retry_sec = hbloop_retry_sec
         self.feedback_hint_interval_sec = feedback_hint_interval_sec
         self.verbose = verbose
+        self._hbloop_status_publish = hbloop_status_publish
         self._lock = threading.Lock()
         self._ack_fails = 0
         # Defer first ping a full interval so boot serial traffic is not a false miss.
@@ -672,6 +697,16 @@ class SerialSyncWatchdog:
         self._last_hbloop_tick_mono = time.monotonic()
         self._hbloop_self_oct = HBLOOP_SELF_OCT_DEFAULT
         self._hbloop_sensor_topic_prefix = HBLOOP_SENSOR_TOPIC_PREFIX_DEFAULT
+
+    def _emit_hbloop_status(self, *, active: bool) -> None:
+        """Publish retained ACTIVE/INACTIVE for JMRI M2S1567 (best-effort)."""
+        pub = self._hbloop_status_publish
+        if pub is None:
+            return
+        try:
+            pub(active)
+        except Exception as exc:
+            print(f"sync: HBLOOP status publish failed: {exc}", file=sys.stderr)
 
     def _begin_hbloop_recovery_cycle_locked(self, now: float, *, quick_first: bool) -> None:
         """Caller holds lock. Start recovery; quick_first → RESUBSCRIBE after 1s."""
@@ -745,8 +780,10 @@ class SerialSyncWatchdog:
             label = self._mark_hbloop_healthy_locked("traffic")
         if label == "established":
             print("sync: HBLOOP established (layout feedback)", file=sys.stderr)
+            self._emit_hbloop_status(active=True)
         elif label and label.startswith("recovered:"):
             print("sync: HBLOOP recovered (layout feedback)", file=sys.stderr)
+            self._emit_hbloop_status(active=True)
 
     def note_turnout_ack(self, ok: bool) -> None:
         if not self.enabled:
@@ -989,8 +1026,10 @@ class SerialSyncWatchdog:
             label = self._mark_hbloop_healthy_locked(source)
         if label == "established":
             print("sync: HBLOOP established", file=sys.stderr)
+            self._emit_hbloop_status(active=True)
         elif label and label.startswith("recovered:"):
             print("sync: HBLOOP recovered", file=sys.stderr)
+            self._emit_hbloop_status(active=True)
 
     def maybe_queue_usb_ping(self) -> bool:
         """Return True if the main loop should send USB_PING_SERIAL_LINE."""
@@ -1061,6 +1100,7 @@ class SerialSyncWatchdog:
             self._last_hbloop_tick_mono = now
             self._awaiting_hbloop_echo = True
         if trigger_lost:
+            self._emit_hbloop_status(active=False)
             if lost_quick:
                 print(
                     f"sync: HBLOOP lost - RESUBSCRIBE in "
@@ -1352,17 +1392,23 @@ def main() -> int:
 
     heartbeat_on = bool(DEBUG_HEARTBEAT or args.debug_heartbeat)
     signalhead_on = bool(FORWARD_SIGNALHEAD_CMDS or args.signalhead)
-    sync_watch = SerialSyncWatchdog(
-        enabled=bool(args.sync_watch),
-        hbloop_enabled=bool(args.sync_watch) and SYNC_HBLOOP_DEFAULT,
-        verbose=args.verbose,
-    )
 
     ping_cmd_queue: queue.Queue[object] = queue.Queue(maxsize=32)
     # Shared serial outbound queue for turnout + signalhead command lines.
     serial_cmd_queue: queue.Queue[bytes] = queue.Queue(maxsize=128)
 
     client = _make_mqtt_client()
+    sync_watch = SerialSyncWatchdog(
+        enabled=bool(args.sync_watch),
+        hbloop_enabled=bool(args.sync_watch) and SYNC_HBLOOP_DEFAULT,
+        verbose=args.verbose,
+        hbloop_status_publish=lambda active: _publish_retained_sensor(
+            client,
+            HBLOOP_STATUS_TOPIC,
+            HBLOOP_STATUS_ACTIVE if active else HBLOOP_STATUS_INACTIVE,
+            verbose=args.verbose,
+        ),
+    )
     sml_guard = DigiconSmlGuard(client, serial_cmd_queue, verbose=args.verbose)
     client.user_data_set((ping_cmd_queue, serial_cmd_queue, sml_guard))
 
@@ -1709,6 +1755,8 @@ def main() -> int:
         client.loop_stop()
         client.disconnect()
         return 1
+    # Panel lamp starts red until HBLOOP establishes.
+    sync_watch._emit_hbloop_status(active=False)
 
     print(f"Connected to MQTT broker at {args.broker}")
     print(

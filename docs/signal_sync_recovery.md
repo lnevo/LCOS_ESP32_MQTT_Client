@@ -42,6 +42,9 @@ While recovering, ops traffic (turnout / signalhead / power / sml RELEASE) may a
 `[HBLOOP down — cmds OK, no layout feedback]` at most once per 60s (same line as the
 cmd log when `--verbose`).
 
+Retained JMRI panel sensor: **`track/sensor/1567`** (`ACTIVE` when established,
+`INACTIVE` when lost / cold-start / bridge start).
+
 Ghost Digicon topic `track/sensor/<display*100+7>` is never published. Self node OCT is
 announced by firmware as `HBLOOP_SELF <oct>` (from `thisNode` / `getNodeID()`).
 
