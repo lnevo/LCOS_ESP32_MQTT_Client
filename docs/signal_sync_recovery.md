@@ -28,14 +28,15 @@ Plant event-125 targets nodes **`1,2,3,4,12,13`** plus **self (015)** once for H
 ## HBLOOP
 
 Every ~5s the agent may send serial `HBLOOP` **only if** no fresh `track/sensor/*`,
-`track/signal*`, or `track/turnout/*` feedback arrived in that window. Probe/ACK/ECHO
-lines are quiet; lifecycle only:
+`track/signal*`, or `track/turnout/*` feedback arrived in that window. While
+recovering, probes continue; the **minute timer** fires the one `RESUBSCRIBE` (not
+an echo-miss edge). Probe/ACK/ECHO lines are quiet; lifecycle only:
 
 | Log | Meaning |
 |-----|---------|
 | `sync: HBLOOP established` | First echo (or layout feedback) |
 | `sync: HBLOOP lost - …` | Health dropped / cold-start miss; 60s echo-only |
-| `sync: HBLOOP miss - …; RESUBSCRIBE` | Still quiet after the minute — one enroll, then echo-only again |
+| `sync: HBLOOP miss - …; RESUBSCRIBE` | Minute timer: still recovering — one enroll, then echo-only again |
 | `sync: HBLOOP recovered` | Echo or layout feedback returned |
 
 Ghost Digicon topic `track/sensor/<display*100+7>` is never published. Self node OCT is

@@ -72,36 +72,8 @@ class TestSerialSyncWatchdog(unittest.TestCase):
         self.assertFalse(w.maybe_queue_hbloop_probe())
         self.assertTrue(w.hbloop_is_established())
 
-    def test_hbloop_lost_keeps_echoing_without_immediate_resub(self) -> None:
-        """DCC/RF path down: lost once, quiet probes, no RESUBSCRIBE until minute gate."""
-        w = SerialSyncWatchdog(
-            enabled=True,
-            hbloop_enabled=True,
-            hbloop_interval_sec=0.0,
-            hbloop_fail_limit=1,
-            hbloop_retry_sec=1.0,
-            resubscribe_cooldown_sec=0.0,
-        )
-        w.maybe_queue_hbloop_probe()
-        w.note_hbloop_echo("echo")
-        w.maybe_queue_hbloop_probe()
-        buf = io.StringIO()
-        with redirect_stderr(buf):
-            w.maybe_queue_hbloop_probe()  # lost
-            w.maybe_queue_hbloop_probe()  # recovering — still disarmed
-            w.maybe_queue_hbloop_probe()
-        text = buf.getvalue()
-        self.assertEqual(text.count("HBLOOP lost"), 1)
-        self.assertNotIn("HBLOOP miss", text)
-        self.assertIsNone(w.take_resubscribe_request())
-        # Echo returns before the gate — no RESUBSCRIBE.
-        with redirect_stderr(buf):
-            w.note_hbloop_echo("echo")
-        self.assertIn("HBLOOP recovered", buf.getvalue())
-        self.assertTrue(w.hbloop_is_established())
-        self.assertIsNone(w.take_resubscribe_request())
-
-    def test_hbloop_one_resub_per_minute_then_disarm_again(self) -> None:
+    def test_hbloop_lost_timer_fires_one_resub(self) -> None:
+        """After lost, echo-only until deadline; timer fires one RESUBSCRIBE."""
         w = SerialSyncWatchdog(
             enabled=True,
             hbloop_enabled=True,
@@ -113,22 +85,45 @@ class TestSerialSyncWatchdog(unittest.TestCase):
         w.maybe_queue_hbloop_probe()
         w.note_hbloop_echo("echo")
         w.maybe_queue_hbloop_probe()
-        w.maybe_queue_hbloop_probe()  # lost; start 0.05s echo-only
-        self.assertIsNone(w.take_resubscribe_request())
-        time.sleep(0.06)
         buf = io.StringIO()
         with redirect_stderr(buf):
-            w.maybe_queue_hbloop_probe()  # miss + one RESUBSCRIBE
-        self.assertIn("HBLOOP miss", buf.getvalue())
-        self.assertEqual(w.take_resubscribe_request(), "hbloop-miss-echo-gate")
-        # Still in post-resub echo-only window — no second RESUBSCRIBE yet.
-        w.maybe_queue_hbloop_probe()
-        w.maybe_queue_hbloop_probe()
+            w.maybe_queue_hbloop_probe()  # lost
+        self.assertIn("HBLOOP lost", buf.getvalue())
+        self.assertIsNone(w.take_resubscribe_request())
+        w.maybe_queue_hbloop_recovery()  # still inside window
         self.assertIsNone(w.take_resubscribe_request())
         time.sleep(0.06)
         with redirect_stderr(buf):
-            w.maybe_queue_hbloop_probe()  # next cycle's one RESUBSCRIBE
-        self.assertEqual(w.take_resubscribe_request(), "hbloop-miss-echo-gate")
+            w.maybe_queue_hbloop_recovery()
+        self.assertIn("HBLOOP miss", buf.getvalue())
+        self.assertEqual(w.take_resubscribe_request(), "hbloop-cycle-timer")
+        # Post-resub disarm window — no immediate second shot.
+        w.maybe_queue_hbloop_recovery()
+        self.assertIsNone(w.take_resubscribe_request())
+        time.sleep(0.06)
+        w.maybe_queue_hbloop_recovery()
+        self.assertEqual(w.take_resubscribe_request(), "hbloop-cycle-timer")
+
+    def test_hbloop_echo_during_wait_skips_resub(self) -> None:
+        w = SerialSyncWatchdog(
+            enabled=True,
+            hbloop_enabled=True,
+            hbloop_interval_sec=0.0,
+            hbloop_fail_limit=1,
+            hbloop_retry_sec=1.0,
+            resubscribe_cooldown_sec=0.0,
+        )
+        w.maybe_queue_hbloop_probe()
+        w.note_hbloop_echo("echo")
+        w.maybe_queue_hbloop_probe()
+        w.maybe_queue_hbloop_probe()  # lost
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            w.note_hbloop_echo("echo")
+        self.assertIn("HBLOOP recovered", buf.getvalue())
+        time.sleep(0.05)
+        w.maybe_queue_hbloop_recovery()
+        self.assertIsNone(w.take_resubscribe_request())
 
     def test_hbloop_cold_start_enters_cycle_not_permanent_disarm(self) -> None:
         w = SerialSyncWatchdog(
@@ -142,17 +137,16 @@ class TestSerialSyncWatchdog(unittest.TestCase):
         self.assertTrue(w.maybe_queue_hbloop_probe())
         buf = io.StringIO()
         with redirect_stderr(buf):
-            w.maybe_queue_hbloop_probe()  # first miss → lost / recovering cycle
+            w.maybe_queue_hbloop_probe()
         self.assertIn("HBLOOP lost", buf.getvalue())
         self.assertNotIn("never returned", buf.getvalue())
         self.assertTrue(w._hbloop_monitor_armed)
         self.assertTrue(w._hbloop_recovering)
-        self.assertIsNone(w.take_resubscribe_request())
         time.sleep(0.06)
         with redirect_stderr(buf):
-            w.maybe_queue_hbloop_probe()
+            w.maybe_queue_hbloop_recovery()
         self.assertIn("HBLOOP miss", buf.getvalue())
-        self.assertEqual(w.take_resubscribe_request(), "hbloop-miss-echo-gate")
+        self.assertEqual(w.take_resubscribe_request(), "hbloop-cycle-timer")
 
     def test_plain_resubscribe_blocked_when_hbloop_established(self) -> None:
         w = SerialSyncWatchdog(
