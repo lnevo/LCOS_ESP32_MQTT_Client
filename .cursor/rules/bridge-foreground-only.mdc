@@ -1,0 +1,20 @@
+---
+description: Bridge runs in foreground only; never leave detached serial_to_mqtt running
+alwaysApply: true
+---
+
+# Windows MQTT bridge process
+
+The live bridge (`serial_to_mqtt.py` / `run_serial_mqtt.cmd`) is **operator-owned** and must run in the **foreground** on the Windows mini PC so the user can see logs and Ctrl+C it.
+
+## Do
+
+- For lab tests: start the bridge only for the duration of the test, then **stop it** before ending the turn.
+- After firmware/agent changes that need a restart: **ask the user to restart the bridge** (`.\run_serial_mqtt.cmd verbose`). Do not start it for them as a lasting process.
+- If you started a bridge for a test, kill it when the test finishes (and confirm no `serial_to_mqtt` PIDs remain).
+
+## Do not
+
+- Leave `serial_to_mqtt` running detached / background / `Start-Process` / `start_bridge_detached.py` after your work.
+- Use `start_bridge_detached.py` (or equivalent) as a “deploy finish” step — that helper is for short probes only; still tear down afterward.
+- Assume a background bridge is OK because MQTT status shows `online`.
