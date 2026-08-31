@@ -293,7 +293,7 @@ static void handleTrackPowerCmdFromSerialLine(lcos_layout *layout, const char *r
 
 /* JMRI display nodes (decimal digit string of RF24 octal addr). Mapped via mqttDisplayNodeToLcosNode.
  * Keep in sync with SYNC_SUBSCRIBE_DISPLAY_NODES in serial_to_mqtt.py.
- * Self (015) is subscribed after plants for HBLOOP block-7 echo (track/sensor/1507). */
+ * Plants only — do not event-125 self here (that thrash/poisoned MASTER vs pre-HBLOOP). */
 static const uint16_t kSubscribeDisplayNodes[] = { 1, 2, 3, 4, 12, 13 };
 
 // --- Serial text from Python (serial_to_mqtt.py) ---
@@ -314,13 +314,13 @@ static void subscribeToNode(LCMNetwork *net, uint16_t sourceNode, uint16_t targe
   out.to_node = 0;
   out.event_type = ETYPE_OPERATING;
   out.event = 125;
-  /* Public API Subscribe to Status (0x7d): mask data0–1, target data2–3, subscriber data4–5. */
+  /* Match pre-HBLOOP working enroll (bare-client): mask + target only. */
   out.data0 = highByte(eventMask);
   out.data1 = lowByte(eventMask);
   out.data2 = highByte(targetNode);
   out.data3 = lowByte(targetNode);
-  out.data4 = highByte(sourceNode);
-  out.data5 = lowByte(sourceNode);
+  out.data4 = 0;
+  out.data5 = 0;
   out.data6 = 0;
   out.cmd_response = 0;
   net->emitEvent(false, 0, &out);
@@ -382,12 +382,8 @@ static void pollSerialTextLineForAck(lcos_layout *layout) {
           mqtt_bridge_setup_subscriptions(layout, layout->getNetworkObject()->getNodeID());
           Serial.println(F("RESUBSCRIBE sent"));
         } else if (layout != NULL && strcmp(s_serialLineBuf, HBLOOP_TOKEN) == 0) {
-          /* Re-assert self then beat — distributor echo => HBLOOP ECHO / 1507. */
-          uint16_t me = layout->getNetworkObject()->getNodeID();
-          subscribeToNode(layout->getNetworkObject(), me, me, SUBSCRIBE_EVENT_MASK);
-          layout->update();
+          /* Beat only — never event-125 here. Re-registering every 5s poisoned MASTER. */
           hbloopSendBeat(layout);
-          Serial.println(F("HBLOOP beat"));
         }
         /* PING / unknown text: ACK already printed — no radio / no turnout. */
       }
@@ -414,9 +410,6 @@ void mqtt_bridge_setup_subscriptions(lcos_layout *layout, uint16_t sourceNode) {
     subscribeToNode(net, sourceNode, lcosTarget, SUBSCRIBE_EVENT_MASK);
     layout->update();
   }
-  /* Self: MASTER echoes our HBLOOP Block-7 beat → serial HBLOOP ECHO (ghost 1507). */
-  subscribeToNode(net, sourceNode, sourceNode, SUBSCRIBE_EVENT_MASK);
-  layout->update();
 }
 
 void mqtt_bridge_poll_serial(lcos_layout *layout, LCMNetwork *net, gateway *serial_gw) {

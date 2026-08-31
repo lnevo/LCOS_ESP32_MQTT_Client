@@ -30,27 +30,21 @@ Nano resets. The Python process often keeps a dead handle until reopen.
 
 1. Periodic **USB `PING`** (~12s). Quiet unless miss; missed `ACK PING` → reopen streak.
 2. Turnout **ACK miss** streak (≥3) → **reopen COM** + **`RESUBSCRIBE`**.
-3. **SerialException** → reopen COM (prefer **no DTR** so Nano is not reset).
-4. **Startup:** probe **HBLOOP** first (3×). If echo works → **skip RESUBSCRIBE** and leave
-   MASTER alone. Only if echo fails → **`RESUBSCRIBE`**. Nano **`setup()` does not**
-   event-125 anymore (COM open used to re-enroll every agent restart and could brick the
-   distributor until MASTER reboot).
+3. **SerialException** → reopen COM (prefer **no DTR** so Nano is not reset when possible).
+4. **Startup:** wait for Nano **`setup()` plant accepts** (nodes 1,2,3,4,12,13). Then beat-only
+   HBLOOP echo check. **Do not** event-125 self or re-register every few seconds — that
+   registration change poisoned MASTER (miss→RESUBSCRIBE death spiral). Validation is
+   **turnout toggle → `track/sensor/…` feedback**, not HBLOOP alone.
 5. **Subscriptions / HBLOOP status** (stderr always):
-   - `sync: subscriptions complete (1,2,3,4,12,13)` when plant event-125 accepts land
-     (self **015** is also subscribed for the HB echo; MASTER often never prints accept for self)
-   - `sync: HBLOOP established` / `lost` / `recovered` / `ok at startup`
-   - **HBLOOP probe (5s):** host sends serial `HBLOOP` → Nano broadcasts Block-7 on node
-     **015**. With self subscribed, distributor should return the beat → serial
-     **`HBLOOP ECHO`** (and would-be `track/sensor/1507`, suppressed from Digicon).
-     No echo within the interval → `HBLOOP miss (n/3)`. **Layout**
-     `track/sensor/*` / `track/signalmast/*` does **not** clear HB — only ECHO/1507 does.
-     **3 misses (~15s)** → **`RESUBSCRIBE`**.
-   - Manual **`RESUBSCRIBE`** while HBLOOP is running is skipped unless
-     **`RESUBSCRIBE FORCE`**. Cooldown between RESUBSCRIBE attempts: **15s**.
-   - After MASTER power-cycle with the bridge left up: wait for miss→RESUBSCRIBE, or
-     send **`RESUBSCRIBE FORCE`**, or restart the bridge.
-6. Turnout **SET/TOGGLE** does not push `EVENT_TURNOUT` on this plant — firmware follows SET
-   with a **GET** so `track/turnout/…` updates. Block sensors still need distributor events.
+   - `sync: subscriptions complete (…)` when plant event-125 accepts land
+   - `sync: HBLOOP established` only after a real **ECHO** (rare without self-sub; monitor
+     disarms instead of thrashing RESUBSCRIBE if echo never appears)
+   - Manual **`RESUBSCRIBE`** while HBLOOP is running is skipped unless **`RESUBSCRIBE FORCE`**.
+     Cooldown **45s**.
+   - After MASTER power-cycle: **`RESUBSCRIBE FORCE`**, or open lab COM7 (MASTER reset) then
+     restart bridge / wait for setup accepts.
+6. Turnout **SET/TOGGLE** follows with **GET** so `track/turnout/…` updates. Block sensors need
+   distributor events (plant subscriptions).
 
 Disable with `--no-sync-watch`.
 
