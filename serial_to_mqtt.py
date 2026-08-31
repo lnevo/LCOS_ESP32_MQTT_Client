@@ -21,10 +21,9 @@ publish BRIDGE_STATUS_OFFLINE (best-effort before disconnect).
 Host -> bridge ops (not retained): payload RESUBSCRIBE | RESUBSCRIBE FORCE | REOPEN |
 PING | HBLOOP on track/bridge/cmd. Sync-watch (default on): USB PING for COM health;
 track event-125 accepts → subscriptions complete / HBLOOP established|lost|recovered.
-HBLOOP every 5s is beat-only (no event-125). Enroll once at Nano setup / RESUBSCRIBE.
-Plant accepts ≠ HBLOOP healthy — established only after ECHO. Miss→RESUBSCRIBE uses
-cooldown and will not thrash if echo never returns after enroll. Manual RESUBSCRIBE
-skipped while HBLOOP running unless FORCE.
+Plant event-125 only in Nano setup() (DTR reset) or explicit RESUBSCRIBE FORCE.
+No HBLOOP radio beats. No auto RESUBSCRIBE from HBLOOP/startup probes.
+Plain MQTT RESUBSCRIBE skipped if plants already enrolled.
 
 Digicon SML guard (track/bridge/sml_mode): on bridge start (and JMRI track/state
 OFFLINE), only if retained/last sml_mode is **enabled**, publish "query". A live Digicon
@@ -134,7 +133,7 @@ SYNC_RESUBSCRIBE_COOLDOWN_SEC = 45.0
 SYNC_REOPEN_COOLDOWN_SEC = 20.0
 # Keep in sync with kSubscribeDisplayNodes[] in lcos_mqtt_bridge.cpp (+ self 015).
 # Values are the OCT strings firmware prints after "Subscription accepted - node: ".
-SYNC_SUBSCRIBE_DISPLAY_NODES = (1, 2, 3, 4, 12, 13)
+SYNC_SUBSCRIBE_DISPLAY_NODES = (0, 1, 2, 3, 4, 12, 13)
 # Plant nodes only. Self (015→"15") is subscribed for possible future use but MASTER
 # often never returns Subscription accepted for self — requiring it blocked "complete"
 # forever and jammed the cmd queue with recovery RESUBSCRIBE waits.
@@ -684,14 +683,9 @@ class SerialSyncWatchdog:
         self._echo_since_enroll = False
         self._hbloop_fails = 0
         self._awaiting_hbloop_echo = False
-        # Grace before first miss window so enroll radio settles.
         self._last_hbloop_tick_mono = time.monotonic()
-        self._hbloop_monitor_armed = True
+        self._hbloop_monitor_armed = False
         print(f"sync: subscriptions complete ({nodes})", file=sys.stderr)
-        print(
-            "sync: waiting for HBLOOP ECHO before continuous monitor",
-            file=sys.stderr,
-        )
 
     def note_serial_line(self, stripped: str) -> None:
         if not self.enabled:
@@ -776,18 +770,11 @@ class SerialSyncWatchdog:
         now = time.monotonic()
         cd = self.resubscribe_cooldown_sec if cooldown_sec is None else cooldown_sec
         with self._lock:
-            # Loop healthy: skip intentional refresh unless FORCE. Loss recovery
-            # (mark_lost=True / miss→RESUBSCRIBE) always proceeds past this gate.
-            loop_running = (
-                self._subs_complete
-                and self._hbloop_established
-                and not self._hbloop_recovering
-                and self._hbloop_fails == 0
-                and self._seen_hbloop_echo
-            )
-            if not force and not mark_lost and loop_running:
+            # Plants already enrolled: skip intentional refresh unless FORCE.
+            # mark_lost=True (USB/serial recovery) may still re-enroll.
+            if not force and not mark_lost and self._subs_complete:
                 print(
-                    "sync: RESUBSCRIBE skipped (HBLOOP running — use FORCE to re-send)",
+                    "sync: RESUBSCRIBE skipped (plants enrolled — use RESUBSCRIBE FORCE)",
                     file=sys.stderr,
                 )
                 return False
@@ -881,6 +868,15 @@ class SerialSyncWatchdog:
         with self._lock:
             return self._subs_complete
 
+    def mark_plants_enrolled_without_accepts(self) -> None:
+        """Agent restarted without Nano reset — keep MASTER distributor state."""
+        with self._lock:
+            self._subs_complete = True
+            self._hbloop_recovering = False
+            self._hbloop_established = False
+            self._hbloop_monitor_armed = False
+            self._ever_established = True
+
     def begin_startup_hbloop_attempt(self) -> None:
         with self._lock:
             self._startup_echo_hit = False
@@ -891,7 +887,8 @@ class SerialSyncWatchdog:
             return self._startup_echo_hit
 
     def maybe_queue_hbloop_probe(self) -> bool:
-        """Every 5s send HBLOOP beat; prior unanswered probe counts as a miss."""
+        """HBLOOP radio monitor disabled — was re-registering / stressing MASTER."""
+        return False
         if not self.enabled:
             return False
         now = time.monotonic()
@@ -1003,33 +1000,15 @@ class SerialSyncWatchdog:
 
 
 def _open_serial(com: str, baud: int) -> serial.Serial:
-    """Open COM without asserting DTR/RTS when possible — avoids Nano reset on agent restart."""
-    try:
-        ser = serial.Serial(
-            port=com,
-            baudrate=baud,
-            bytesize=serial.EIGHTBITS,
-            parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_ONE,
-            timeout=0.25,
-            dsrdtr=False,
-            rtscts=False,
-        )
-    except (TypeError, ValueError):
-        ser = serial.Serial(
-            port=com,
-            baudrate=baud,
-            bytesize=serial.EIGHTBITS,
-            parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_ONE,
-            timeout=0.25,
-        )
-    try:
-        ser.dtr = False
-        ser.rts = False
-    except Exception:
-        pass
-    return ser
+    """Open COM like pre-HBLOOP (DTR reset runs Nano setup() plant enroll once)."""
+    return serial.Serial(
+        port=com,
+        baudrate=baud,
+        bytesize=serial.EIGHTBITS,
+        parity=serial.PARITY_NONE,
+        stopbits=serial.STOPBITS_ONE,
+        timeout=0.25,
+    )
 
 
 def parse_line(line: str) -> tuple[str, str] | None:
@@ -1288,14 +1267,8 @@ def main() -> int:
                 sync_watch.request_reopen("mqtt-bridge-cmd")
                 print("sync: MQTT track/bridge/cmd REOPEN queued")
             elif body == "HBLOOP":
-                # Same as RESUBSCRIBE: skipped when already enrolled unless FORCE.
-                if sync_watch.request_resubscribe(
-                    "mqtt-bridge-cmd-hbloop",
-                    cooldown_sec=0.0,
-                    mark_lost=False,
-                    force=False,
-                ):
-                    print("sync: MQTT track/bridge/cmd HBLOOP -> RESUBSCRIBE queued")
+                # No radio HBLOOP — ignore (do not RESUBSCRIBE).
+                print("sync: MQTT HBLOOP ignored (radio HBLOOP disabled)")
             elif body == "HBLOOP FORCE" or body == "FORCE":
                 if sync_watch.request_resubscribe(
                     "mqtt-bridge-cmd-force",
@@ -1743,11 +1716,11 @@ def main() -> int:
         return False
 
     def _startup_wait_enroll_then_hbloop() -> None:
-        """Wait for Nano setup() plant accepts, then confirm HBLOOP echo (beat-only)."""
+        """Wait for Nano setup() plant accepts after DTR reset. Never HBLOOP / auto-RESUB."""
         if not sync_watch.enabled:
             return
         print(
-            "sync: startup waiting for plant subscriptions (Nano setup)",
+            "sync: startup waiting for Nano setup() plant accepts (no HBLOOP, no auto RESUBSCRIBE)",
             file=sys.stderr,
         )
         enroll_deadline = time.monotonic() + 8.0
@@ -1758,45 +1731,20 @@ def main() -> int:
             else:
                 time.sleep(0.05)
             if sync_watch.plants_enrolled():
-                break
-        if not sync_watch.plants_enrolled():
-            print(
-                "sync: startup plants incomplete — RESUBSCRIBE once",
-                file=sys.stderr,
-            )
-            sync_watch.request_resubscribe(
-                "startup-plants-miss",
-                cooldown_sec=0.0,
-                mark_lost=True,
-                force=True,
-            )
-            return
-        print("sync: startup HBLOOP echo check", file=sys.stderr)
-        for attempt in range(1, SYNC_HBLOOP_STARTUP_ATTEMPTS + 1):
-            sync_watch.begin_startup_hbloop_attempt()
-            try:
-                ser.write(HBLOOP_SERIAL_LINE)
-                ser.flush()
-            except serial.SerialException as exc:
-                sync_watch.note_serial_exception(exc)
+                print(
+                    "sync: startup plants enrolled — leaving MASTER alone",
+                    file=sys.stderr,
+                )
                 return
-            wait_deadline = time.monotonic() + SYNC_HBLOOP_STARTUP_ECHO_WAIT_SEC
-            while time.monotonic() < wait_deadline:
-                line = _read_one_serial_line()
-                if line is not None:
-                    _handle_and_is_ack(line)
-                else:
-                    time.sleep(0.05)
-                if sync_watch.startup_hbloop_attempt_ok():
-                    return
-            print(
-                f"sync: startup HBLOOP miss ({attempt}/{SYNC_HBLOOP_STARTUP_ATTEMPTS})",
-                file=sys.stderr,
-            )
         print(
-            "sync: startup plants OK but no HBLOOP ECHO — continuous monitor will keep trying "
-            "(no RESUBSCRIBE storm)",
+            "sync: startup plants incomplete after Nano boot — RESUBSCRIBE FORCE once",
             file=sys.stderr,
+        )
+        sync_watch.request_resubscribe(
+            "startup-plants-miss",
+            cooldown_sec=0.0,
+            mark_lost=True,
+            force=True,
         )
 
     def _send_resubscribe(reason: str) -> None:

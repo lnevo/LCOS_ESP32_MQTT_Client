@@ -31,7 +31,7 @@ Nano resets. The Python process often keeps a dead handle until reopen.
 1. Periodic **USB `PING`** (~12s). Quiet unless miss; missed `ACK PING` → reopen streak.
 2. Turnout **ACK miss** streak (≥3) → **reopen COM** + **`RESUBSCRIBE`**.
 3. **SerialException** → reopen COM (prefer **no DTR** so Nano is not reset when possible).
-4. **Startup:** wait for Nano **`setup()` plant accepts** (nodes 1,2,3,4,12,13). Then beat-only
+4. **Startup:** avoid Nano DTR reset; wait for **`setup()` accepts only if Nano reset**; never auto-HBLOOP (nodes 1,2,3,4,12,13). Then beat-only
    HBLOOP echo check. **Do not** event-125 self or re-register every few seconds — that
    registration change poisoned MASTER (miss→RESUBSCRIBE death spiral). Validation is
    **turnout toggle → `track/sensor/…` feedback**, not HBLOOP alone.

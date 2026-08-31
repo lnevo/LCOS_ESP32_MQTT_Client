@@ -293,8 +293,8 @@ static void handleTrackPowerCmdFromSerialLine(lcos_layout *layout, const char *r
 
 /* JMRI display nodes (decimal digit string of RF24 octal addr). Mapped via mqttDisplayNodeToLcosNode.
  * Keep in sync with SYNC_SUBSCRIBE_DISPLAY_NODES in serial_to_mqtt.py.
- * Plants only — do not event-125 self here (that thrash/poisoned MASTER vs pre-HBLOOP). */
-static const uint16_t kSubscribeDisplayNodes[] = { 1, 2, 3, 4, 12, 13 };
+ * Exact pre-HBLOOP plant list (4255f74) — no self-sub. */
+static const uint16_t kSubscribeDisplayNodes[] = { 0, 1, 2, 3, 4, 12, 13 };
 
 // --- Serial text from Python (serial_to_mqtt.py) ---
 // Turnout line "track/cmd/turnout/<packed> ..." uses jmriNode*100+uid; mqttDisplayNodeToLcosNode() before sendShortMessage.
@@ -382,8 +382,7 @@ static void pollSerialTextLineForAck(lcos_layout *layout) {
           mqtt_bridge_setup_subscriptions(layout, layout->getNetworkObject()->getNodeID());
           Serial.println(F("RESUBSCRIBE sent"));
         } else if (layout != NULL && strcmp(s_serialLineBuf, HBLOOP_TOKEN) == 0) {
-          /* Beat only — never event-125 here. Re-registering every 5s poisoned MASTER. */
-          hbloopSendBeat(layout);
+          /* USB ACK only — no radio. Multicast Block beats were stressing MASTER. */
         }
         /* PING / unknown text: ACK already printed — no radio / no turnout. */
       }

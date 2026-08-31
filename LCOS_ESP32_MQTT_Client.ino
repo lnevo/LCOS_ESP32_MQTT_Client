@@ -57,7 +57,7 @@ void setup() {
   Serial.println(F(">"));
 
   layout->update();
-  /* One-shot event-125 at boot (plants + self). Do not re-register from HBLOOP. */
+  /* One-shot plant event-125 at boot only (same as pre-HBLOOP). */
   mqtt_bridge_setup_subscriptions(layout, thisNode);
 }
 
