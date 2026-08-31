@@ -9,5 +9,5 @@ Get-CimInstance Win32_Process |
   }
 Start-Sleep -Seconds 2
 $env:PYTHONUNBUFFERED = '1'
-python -u serial_to_mqtt.py --com COM3 --broker 192.168.137.2 --verbose --signalhead
+python -u serial_to_mqtt.py --com COM3 --broker 192.168.137.2 --verbose
 

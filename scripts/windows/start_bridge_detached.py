@@ -37,7 +37,6 @@ def main() -> int:
             "--broker",
             "192.168.137.2",
             "--verbose",
-            "--signalhead",
         ],
         cwd=str(ROOT),
         stdout=LOG.open("w", encoding="utf-8"),

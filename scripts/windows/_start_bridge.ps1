@@ -5,5 +5,5 @@ Get-CimInstance Win32_Process |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 2
 $env:PYTHONUNBUFFERED = '1'
-python -u serial_to_mqtt.py --com COM3 --broker 192.168.137.2 --verbose --signalhead
+python -u serial_to_mqtt.py --com COM3 --broker 192.168.137.2 --verbose
 
