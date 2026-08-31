@@ -884,6 +884,7 @@ class SerialSyncWatchdog:
         trigger_lost = False
         do_auto_resub = False
         fails = 0
+        disarm_msg: str | None = None
         with self._lock:
             if not self._hbloop_monitor_armed:
                 return False
@@ -903,38 +904,36 @@ class SerialSyncWatchdog:
                             do_auto_resub = True
                         else:
                             self._hbloop_monitor_armed = False
-                            print(
+                            disarm_msg = (
                                 "sync: HBLOOP lost again after auto-RESUBSCRIBE - "
-                                "monitor disarmed; use MQTT RESUBSCRIBE when ready",
-                                file=sys.stderr,
+                                "monitor disarmed; use MQTT RESUBSCRIBE when ready"
                             )
-                            return False
                     elif self._hbloop_auto_resub_spent:
                         # Auto-RESUBSCRIBE already tried; echo never came back.
                         self._hbloop_monitor_armed = False
-                        print(
+                        disarm_msg = (
                             "sync: HBLOOP did not re-establish after auto-RESUBSCRIBE - "
-                            "monitor disarmed; use MQTT RESUBSCRIBE when ready",
-                            file=sys.stderr,
+                            "monitor disarmed; use MQTT RESUBSCRIBE when ready"
                         )
-                        return False
                     elif not self._seen_hbloop_echo:
                         # Cold start never got an echo — do not thrash MASTER.
                         self._hbloop_monitor_armed = False
-                        print(
+                        disarm_msg = (
                             "sync: HBLOOP echo never returned after enroll - monitor disarmed "
-                            "(plants stay enrolled; use MQTT RESUBSCRIBE if sensors die)",
-                            file=sys.stderr,
+                            "(plants stay enrolled; use MQTT RESUBSCRIBE if sensors die)"
                         )
-                        return False
             self._last_hbloop_tick_mono = now
-            self._awaiting_hbloop_echo = True
+            if disarm_msg is None:
+                self._awaiting_hbloop_echo = True
         if fails:
             print(
                 f"sync: HBLOOP miss ({fails}/{self.hbloop_fail_limit}) "
                 f"- no ECHO/1507 within {self.hbloop_interval_sec:.0f}s",
                 file=sys.stderr,
             )
+        if disarm_msg is not None:
+            print(disarm_msg, file=sys.stderr)
+            return False
         if trigger_lost:
             print(f"sync: HBLOOP lost (hbloop-miss-{fails})", file=sys.stderr)
         if do_auto_resub:
