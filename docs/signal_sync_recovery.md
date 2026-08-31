@@ -14,17 +14,15 @@ Plant event-125 targets nodes **`1,2,3,4,12,13`** plus **self (015)** once for H
 
 ## HBLOOP
 
-Every ~5s the agent may send serial `HBLOOP` **only if** no fresh `track/sensor/*` or `track/signal*` feedback arrived in that window (layout traffic proves the distributor).
-
-Firmware broadcasts Block-7 from node 015; if MASTER redistributes it, Nano prints `HBLOOP ECHO`.
+Every ~5s the agent may send serial `HBLOOP` **only if** no fresh `track/sensor/*`,
+`track/signal*`, or `track/turnout/*` feedback arrived in that window.
 
 | Log | Meaning |
 |-----|---------|
 | `sync: HBLOOP established` | First echo (or layout feedback) |
-| `sync: HBLOOP miss (1/1)` | Probe got no echo within 5s |
-| `sync: HBLOOP lost - auto RESUBSCRIBE in 1s` | First recovery attempt scheduled |
-| `sync: HBLOOP recovery RESUBSCRIBE (hbloop-retry-60s)` | Still down — retry enroll |
-| `sync: HBLOOP recovered` | Echo or sensor/signal* feedback returned |
+| `sync: HBLOOP lost - …` | One line when health drops; no repeated miss spam while recovering |
+| `sync: RESUBSCRIBE (hbloop-…)` | Auto enroll (1s after lost, then every 60s) |
+| `sync: HBLOOP recovered` | Echo or layout feedback returned |
 
 Ghost Digicon topic `track/sensor/<display*100+7>` is never published. Self node OCT is
 announced by firmware as `HBLOOP_SELF <oct>` (from `thisNode` / `getNodeID()`).

@@ -141,6 +141,7 @@ _HBLOOP_TRAFFIC_TOPIC_PREFIXES = (
     "track/sensor/",
     "track/signalmast/",
     "track/signalhead/",
+    "track/turnout/",
 )
 
 # Host bridge presence: same topic for startup and shutdown (retained; QoS 1).
@@ -926,7 +927,6 @@ class SerialSyncWatchdog:
         now = time.monotonic()
         trigger_lost = False
         schedule_delayed_resub = False
-        fails = 0
         disarm_msg: str | None = None
         with self._lock:
             if not self._hbloop_monitor_armed:
@@ -951,14 +951,11 @@ class SerialSyncWatchdog:
                     if self._hbloop_established:
                         self._hbloop_established = False
                         trigger_lost = True
-                        if not self._hbloop_recovering:
-                            self._hbloop_recovering = True
-                            self._hbloop_pending_resub_mono = (
-                                now + self.hbloop_resub_delay_sec
-                            )
-                            schedule_delayed_resub = True
+                        self._hbloop_recovering = True
+                        self._hbloop_pending_resub_mono = now + self.hbloop_resub_delay_sec
+                        schedule_delayed_resub = True
                     elif self._hbloop_recovering:
-                        # Already recovering — minute retry handles further RESUBSCRIBE.
+                        # Already lost — keep probing quietly for recovery; no miss spam.
                         pass
                     elif not self._seen_hbloop_echo:
                         self._hbloop_monitor_armed = False
@@ -969,22 +966,14 @@ class SerialSyncWatchdog:
             self._last_hbloop_tick_mono = now
             if disarm_msg is None:
                 self._awaiting_hbloop_echo = True
-        if fails:
-            print(
-                f"sync: HBLOOP miss ({fails}/{self.hbloop_fail_limit}) "
-                f"- no ECHO/1507 within {self.hbloop_interval_sec:.0f}s",
-                file=sys.stderr,
-            )
         if disarm_msg is not None:
             print(disarm_msg, file=sys.stderr)
             return False
         if trigger_lost:
-            print(f"sync: HBLOOP lost (hbloop-miss-{fails})", file=sys.stderr)
-        if schedule_delayed_resub:
             print(
-                f"sync: HBLOOP lost - auto RESUBSCRIBE in "
-                f"{self.hbloop_resub_delay_sec:.0f}s "
-                f"(then retry every {self.hbloop_retry_sec:.0f}s until recovered)",
+                f"sync: HBLOOP lost - no ECHO within {self.hbloop_interval_sec:.0f}s; "
+                f"auto RESUBSCRIBE in {self.hbloop_resub_delay_sec:.0f}s "
+                f"(retry every {self.hbloop_retry_sec:.0f}s until recovered)",
                 file=sys.stderr,
             )
         return True
@@ -1011,7 +1000,7 @@ class SerialSyncWatchdog:
                 self._last_hbloop_retry_mono = now
                 reason = "hbloop-retry-60s"
         if reason is not None:
-            print(f"sync: HBLOOP recovery RESUBSCRIBE ({reason})", file=sys.stderr)
+            # Quiet: RESUBSCRIBE path already prints sync: RESUBSCRIBE (...).
             self.request_resubscribe(reason, force=True)
 
     def mark_resubscribe_sent(self) -> None:
