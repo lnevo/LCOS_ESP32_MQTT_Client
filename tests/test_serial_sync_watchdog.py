@@ -74,7 +74,7 @@ class TestSerialSyncWatchdog(unittest.TestCase):
         self.assertIn("HBLOOP miss (1/3)", buf.getvalue())
         self.assertIsNone(w.take_resubscribe_request())
 
-    def test_hbloop_established_then_lost_no_resubscribe(self) -> None:
+    def test_hbloop_lost_auto_resubscribe_once(self) -> None:
         w = SerialSyncWatchdog(
             enabled=True,
             hbloop_enabled=True,
@@ -84,11 +84,31 @@ class TestSerialSyncWatchdog(unittest.TestCase):
         )
         self.assertTrue(w.maybe_queue_hbloop_probe())
         w.note_hbloop_echo("echo")
-        # Next probe arms await; then three misses → lost. Never RESUBSCRIBE.
+        # Arm await + three misses → lost → one auto RESUBSCRIBE.
+        for _ in range(4):
+            w.maybe_queue_hbloop_probe()
+        self.assertEqual(w.take_resubscribe_request(), "hbloop-miss-3")
+        self.assertTrue(w._hbloop_auto_resub_spent)
+        self.assertTrue(w._hbloop_monitor_armed)
+
+    def test_hbloop_no_reestablish_after_auto_waits_for_manual(self) -> None:
+        w = SerialSyncWatchdog(
+            enabled=True,
+            hbloop_enabled=True,
+            hbloop_interval_sec=0.0,
+            hbloop_fail_limit=3,
+            resubscribe_cooldown_sec=0.0,
+        )
+        w.maybe_queue_hbloop_probe()
+        w.note_hbloop_echo("echo")
+        for _ in range(4):
+            w.maybe_queue_hbloop_probe()
+        self.assertEqual(w.take_resubscribe_request(), "hbloop-miss-3")
+        # Simulate post-auto probes with no echo → disarm, no second auto.
         for _ in range(4):
             w.maybe_queue_hbloop_probe()
         self.assertIsNone(w.take_resubscribe_request())
-        self.assertFalse(w._hbloop_established)
+        self.assertFalse(w._hbloop_monitor_armed)
 
     def test_disabled_noop(self) -> None:
         w = SerialSyncWatchdog(enabled=False, ack_fail_limit=1, hbloop_enabled=False)

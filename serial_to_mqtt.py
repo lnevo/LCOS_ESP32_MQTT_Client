@@ -20,8 +20,9 @@ publish BRIDGE_STATUS_OFFLINE (best-effort before disconnect).
 
 Host -> bridge ops (not retained): payload RESUBSCRIBE | RESUBSCRIBE FORCE | REOPEN | PING | HBLOOP on
 track/bridge/cmd. Manual MQTT RESUBSCRIBE always fires (no cooldown); FORCE is an alias.
-HBLOOP monitor (default on with sync-watch): serial Block-7 beat → expect HBLOOP ECHO; logs
-miss/lost/recovered only — never auto-RESUBSCRIBE.
+HBLOOP monitor (default on with sync-watch): serial Block-7 beat → expect HBLOOP ECHO; on
+lost after established, one auto-RESUBSCRIBE; if echo still missing, disarm for manual
+MQTT RESUBSCRIBE.
 Auto sync-watch RESUBSCRIBE (USB/boot thin-accept) still uses cooldown to avoid storms.
 (see docs/archive/manual_resubscribe_hbloop_era.md).
 
@@ -571,8 +572,8 @@ class SerialSyncWatchdog:
       3) Nano boot banner  (arm thin-accept check; setup() already subscribed)
       4) SerialException  (COM stolen / USB drop) -> reopen
       5) RESUBSCRIBE text  (manual / USB recovery — re-emit event 125)
-      6) HBLOOP (monitor-only): serial Block-7 beat → HBLOOP ECHO; log miss/lost;
-         never auto-RESUBSCRIBE (operator uses track/bridge/cmd RESUBSCRIBE)
+      6) HBLOOP: Block-7 beat → HBLOOP ECHO; on lost after established, one auto
+         RESUBSCRIBE; if still no establish, disarm and wait for manual MQTT RESUBSCRIBE
 
     MQTT broker resubscribe alone does not fix layout silence — LCOS radio
     subscriptions live on the Nano.
@@ -618,12 +619,13 @@ class SerialSyncWatchdog:
         self._want_resubscribe = False
         self._reopen_reason = ""
         self._resubscribe_reason = ""
-        # HBLOOP monitor (detect-only).
+        # HBLOOP monitor: one auto-RESUBSCRIBE after lost; then manual only.
         self._hbloop_fails = 0
         self._awaiting_hbloop_echo = False
         self._seen_hbloop_echo = False
         self._hbloop_established = False
         self._hbloop_monitor_armed = bool(hbloop_enabled)
+        self._hbloop_auto_resub_spent = False
         self._last_hbloop_tick_mono = time.monotonic()
 
     def note_turnout_ack(self, ok: bool) -> None:
@@ -729,8 +731,14 @@ class SerialSyncWatchdog:
             self._reopen_reason = reason
             self._last_reopen_mono = now
 
-    def request_resubscribe(self, reason: str, *, force: bool = False) -> bool:
-        """Queue RESUBSCRIBE. force=True bypasses cooldown (manual lab / RESUBSCRIBE FORCE)."""
+    def request_resubscribe(
+        self, reason: str, *, force: bool = False, reset_hbloop_budget: bool = False
+    ) -> bool:
+        """Queue RESUBSCRIBE. force=True bypasses cooldown (manual lab / RESUBSCRIBE FORCE).
+
+        reset_hbloop_budget=True (manual MQTT): clear the one-shot auto-RESUBSCRIBE flag
+        so a later MASTER reboot can auto-recover once again.
+        """
         if not self.enabled:
             return False
         now = time.monotonic()
@@ -747,14 +755,14 @@ class SerialSyncWatchdog:
             self._want_resubscribe = True
             self._resubscribe_reason = reason
             self._last_resubscribe_mono = now
-            # Intentional refresh — reset HBLOOP await so we re-establish on echo.
             self._awaiting_hbloop_echo = False
             self._hbloop_fails = 0
             self._hbloop_monitor_armed = True
             self._hbloop_established = False
-            # Allow a fresh establish after manual RESUBSCRIBE.
-            self._seen_hbloop_echo = False
             self._last_hbloop_tick_mono = now
+            if reset_hbloop_budget:
+                self._hbloop_auto_resub_spent = False
+                self._seen_hbloop_echo = False
         return True
 
     def take_reopen_request(self) -> str | None:
@@ -783,6 +791,8 @@ class SerialSyncWatchdog:
             self._seen_hbloop_echo = True
             self._hbloop_established = True
             self._hbloop_monitor_armed = True
+            # Healthy again — allow one auto-RESUBSCRIBE on a future lost episode.
+            self._hbloop_auto_resub_spent = False
         if first and not recovering:
             print("sync: HBLOOP established", file=sys.stderr)
         elif recovering:
@@ -816,11 +826,12 @@ class SerialSyncWatchdog:
         return True
 
     def maybe_queue_hbloop_probe(self) -> bool:
-        """Queue serial HBLOOP beat. Logs miss/lost; never RESUBSCRIBE."""
+        """Queue serial HBLOOP beat. One auto-RESUBSCRIBE on lost; then manual only."""
         if not self.enabled or not self.hbloop_enabled:
             return False
         now = time.monotonic()
         trigger_lost = False
+        do_auto_resub = False
         fails = 0
         with self._lock:
             if not self._hbloop_monitor_armed:
@@ -836,8 +847,28 @@ class SerialSyncWatchdog:
                     if self._hbloop_established:
                         self._hbloop_established = False
                         trigger_lost = True
+                        if not self._hbloop_auto_resub_spent:
+                            self._hbloop_auto_resub_spent = True
+                            do_auto_resub = True
+                        else:
+                            self._hbloop_monitor_armed = False
+                            print(
+                                "sync: HBLOOP lost again after auto-RESUBSCRIBE - "
+                                "monitor disarmed; use MQTT RESUBSCRIBE when ready",
+                                file=sys.stderr,
+                            )
+                            return False
+                    elif self._hbloop_auto_resub_spent:
+                        # Auto-RESUBSCRIBE already tried; echo never came back.
+                        self._hbloop_monitor_armed = False
+                        print(
+                            "sync: HBLOOP did not re-establish after auto-RESUBSCRIBE - "
+                            "monitor disarmed; use MQTT RESUBSCRIBE when ready",
+                            file=sys.stderr,
+                        )
+                        return False
                     elif not self._seen_hbloop_echo:
-                        # Never got an echo — disarm so we do not spam forever.
+                        # Cold start never got an echo — do not thrash MASTER.
                         self._hbloop_monitor_armed = False
                         print(
                             "sync: HBLOOP echo never returned after enroll - monitor disarmed "
@@ -855,11 +886,14 @@ class SerialSyncWatchdog:
             )
         if trigger_lost:
             print(f"sync: HBLOOP lost (hbloop-miss-{self.hbloop_fail_limit})", file=sys.stderr)
+        if do_auto_resub:
             print(
-                "sync: HBLOOP lost - distributor likely down; MQTT RESUBSCRIBE when ready "
-                "(monitor will keep probing; no auto-RESUBSCRIBE)",
+                "sync: HBLOOP lost - auto RESUBSCRIBE once "
+                "(if echo does not return, wait for manual RESUBSCRIBE)",
                 file=sys.stderr,
             )
+            self.request_resubscribe(f"hbloop-miss-{self.hbloop_fail_limit}", force=True)
+            return False
         return True
 
     def mark_resubscribe_sent(self) -> None:
@@ -1147,7 +1181,9 @@ def main() -> int:
             if body == "RESUBSCRIBE" or body == "RESUBSCRIBE FORCE":
                 # Manual MQTT path: always fire (no cooldown) so MASTER reboot
                 # recovery does not require restarting the agent.
-                if sync_watch.request_resubscribe("mqtt-bridge-cmd", force=True):
+                if sync_watch.request_resubscribe(
+                    "mqtt-bridge-cmd", force=True, reset_hbloop_budget=True
+                ):
                     print("sync: MQTT track/bridge/cmd RESUBSCRIBE queued")
             elif body == "PING":
                 try:
