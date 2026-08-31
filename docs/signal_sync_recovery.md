@@ -1,16 +1,26 @@
 # Bridge sync recovery (USB + LCOS radio)
 
 HBLOOP watches the radio path to MASTER (often via a **DCC node**). Layout power-off can
-drop that path without clearing MASTER’s subscription RAM — so we **keep echoing** and only
-`RESUBSCRIBE` if the path stays dead.
+drop that path without clearing MASTER’s subscription RAM.
+
+## Recovery cycle (while unhealthy)
+
+1. **lost** → quiet echo probes; **RESUBSCRIBE disarmed for 60s**
+2. If **echo** or **layout traffic** returns in that minute → **recovered** (no enroll)
+3. If still quiet → **miss** + **one RESUBSCRIBE**, then another **60s echo-only** window
+4. Repeat until healthy (covers MASTER reboot while the layout was down: within ~1 minute
+   after the path is back, one enroll can land)
+
+Never permanently disarm the monitor after a miss (agent restart with layout down must
+still recover).
 
 ## Agent restart vs MASTER reboot vs layout power
 
 | Event | What should happen |
 |-------|--------------------|
-| **Agent restart** | Open COM **without** DTR reset so Nano does not re-run `setup()` event-125. Prior plant subscriptions stay on MASTER. |
-| **Layout / DCC off** | HBLOOP **lost**; quiet echo probes continue; **RESUBSCRIBE disarmed** for **60s**. If path returns → **recovered** (no re-enroll). |
-| **MASTER reboot** | Echo stays dead after path is up → after **60s** a failed echo → **miss** + auto `RESUBSCRIBE`. Retry every **60s** the same way until echo or layout feedback. |
+| **Agent restart** | Open COM **without** DTR. Prior plant subscriptions stay on MASTER. Cold-start miss enters the same 60s cycle (does not give up). |
+| **Layout / DCC off** | **lost**; echo continues; resub disarmed 60s. Path/traffic back → **recovered**. |
+| **MASTER reboot** | Echo stays dead → after 60s **miss** + one `RESUBSCRIBE`; repeat minute cycles until healthy. |
 | **Intentional Nano reset** | MQTT `REOPEN` (or unplug) pulses DTR → `setup()` plant+self enroll again. |
 
 Plant event-125 targets nodes **`1,2,3,4,12,13`** plus **self (015)** once for HBLOOP echo — never MASTER (`0`).
@@ -24,8 +34,8 @@ lines are quiet; lifecycle only:
 | Log | Meaning |
 |-----|---------|
 | `sync: HBLOOP established` | First echo (or layout feedback) |
-| `sync: HBLOOP lost - …` | Health dropped; echo continues; RESUBSCRIBE disarmed for 60s |
-| `sync: HBLOOP miss - …; RESUBSCRIBE` | Still no echo after the disarm window (echo-gated enroll) |
+| `sync: HBLOOP lost - …` | Health dropped / cold-start miss; 60s echo-only |
+| `sync: HBLOOP miss - …; RESUBSCRIBE` | Still quiet after the minute — one enroll, then echo-only again |
 | `sync: HBLOOP recovered` | Echo or layout feedback returned |
 
 Ghost Digicon topic `track/sensor/<display*100+7>` is never published. Self node OCT is
@@ -38,7 +48,7 @@ announced by firmware as `HBLOOP_SELF <oct>` (from `thisNode` / `getNodeID()`).
 | Turnout cmd, no `ACK …` on serial | USB | COM stolen, Nano reset mid-handle, dead pyserial handle |
 | `ACK` OK, no `track/turnout` / `track/sensor` updates | Radio | MASTER dropped Nano’s event-125 subscriptions |
 | HBLOOP lost, then recovered (no miss) | RF path | DCC/layout routing node off briefly — sub intact |
-| HBLOOP miss + RESUBSCRIBE | Radio | Path up but distributor sub gone (e.g. MASTER reboot) |
+| HBLOOP miss + RESUBSCRIBE | Radio | Still quiet after 60s (path up but sub gone, or path still down) |
 
 ## Host recovery (`serial_to_mqtt.py`, `--sync-watch` default on)
 
@@ -50,7 +60,7 @@ announced by firmware as `HBLOOP_SELF <oct>` (from `thisNode` / `getNodeID()`).
    - **`RESUBSCRIBE`** — only if HBLOOP is **not** established (no cooldown)
    - **`RESUBSCRIBE FORCE`** — always (no cooldown), even while healthy
    - **`REOPEN`** / **`PING`** / **`HBLOOP`**
-6. HBLOOP: traffic-gated probe; lost → echo-only for 60s; then miss+RESUBSCRIBE only if echo still fails.
+6. HBLOOP minute cycle as above.
 
 ## Firmware
 
