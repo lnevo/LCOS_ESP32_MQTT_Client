@@ -29,7 +29,7 @@ run_serial_mqtt.sh — run serial_to_mqtt.py with defaults from SERIAL_PORT and 
     BROKER        default 192.168.137.1
     SERIAL_VERBOSE=1   same as -v
 
-  Other arguments are passed to Python (e.g. --baud 115200 --mqtt-port 1883).
+  Other arguments are passed to Python (e.g. --baud 250000 --mqtt-port 1883).
 
   Full Python usage:  python3 serial_to_mqtt.py --help
 EOF

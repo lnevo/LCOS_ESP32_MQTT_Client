@@ -59,6 +59,8 @@ static const uint16_t kSubscribeDisplayNodes[] = { 1, 2, 3, 4, 12, 13 };
 
 Replace with the JMRI-style **display** node numbers you need event-125 coverage for. After changing firmware, reflash (Windows helper: `scripts/windows/flash_nano.py` or your usual `flash_lcos.bat` / IDE upload).
 
+USB serial defaults to **250000** baud (`Serial.begin` in the `.ino` and `DEFAULT_BAUD` in `serial_to_mqtt.py` — keep them matched).
+
 On boot you should see library banner lines and `Subscription accepted - node: …` for each target (also after host `RESUBSCRIBE`).
 
 ## 2. Run the Python bridge

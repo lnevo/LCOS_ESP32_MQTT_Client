@@ -2,7 +2,7 @@
 """Baud ladder on COM3: flash Nano + USB PING/burst/HBLOOP probes per rate.
 
 Run on the Windows mini PC from the bridge repo root (kills serial_to_mqtt while testing).
-Restores 115200 when done unless --keep-baud is set.
+Restores 250000 when done unless --keep-baud is set.
 """
 
 from __future__ import annotations
@@ -260,7 +260,7 @@ def main() -> int:
         "--keep-baud",
         type=int,
         default=None,
-        help="leave firmware/agent at this baud after tests (default: restore 115200)",
+        help="leave firmware/agent at this baud after tests (default: restore 250000)",
     )
     args = ap.parse_args()
     bauds = [int(x.strip()) for x in args.bauds.split(",") if x.strip()]
@@ -273,7 +273,7 @@ def main() -> int:
     for baud in bauds:
         results.append(run_one(baud))
 
-    restore = args.keep_baud if args.keep_baud is not None else 115200
+    restore = args.keep_baud if args.keep_baud is not None else 250000
     print(f"\n=== RESTORE {restore} ===", flush=True)
     set_baud_sources(restore)
     flash()

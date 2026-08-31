@@ -39,7 +39,7 @@ void setup() {
   layout = new lcos_layout(channel, thisNode, childMap);
   layout->setNodeType(configType);
   // setup Serial communications
-  Serial.begin(115200);
+  Serial.begin(250000);
   // call begin() to start the radio network
   layout->begin();
   if(!layout->isStarted()){
