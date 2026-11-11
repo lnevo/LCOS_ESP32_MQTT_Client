@@ -199,6 +199,20 @@ _SIGNALHEAD_APPEARANCE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# JMRI is the standard for appearance names: its SignalHead names flashing aspects
+# "Flashing Red" etc. The Nano firmware's token is "FlashRed", so the bridge accepts
+# JMRI's spelling and hands the firmware its own.
+_JMRI_FLASHING_RE = re.compile(r"^Flashing\s+(Red|Yellow|Green|Lunar)\s*$", re.IGNORECASE)
+
+
+def normalize_signalhead_appearance(body: str) -> str:
+    """JMRI appearance name -> firmware token ("Flashing Red" -> "FlashRed"); others unchanged."""
+    m = _JMRI_FLASHING_RE.match(body)
+    if m is None:
+        return body
+    return "Flash" + m.group(1).capitalize()
+
+
 # LCOS signal UIDs: UID_OFFSET_SIGNALS .. UID_OFFSET_CROSSINGS-1 (lcos.h).
 LCOS_SIGNAL_UID_MIN = 32
 LCOS_SIGNAL_UID_MAX = 47
@@ -1602,11 +1616,13 @@ def main() -> int:
                 if args.verbose:
                     print(f"MQTT signalhead: UTF-8 decode failed: {e}", file=sys.stderr)
                 return
+            body = normalize_signalhead_appearance(body)
             if not _SIGNALHEAD_APPEARANCE_RE.match(body):
                 if args.verbose:
                     print(
                         "MQTT signalhead rejected: expected Red/Yellow/Green/Dark "
-                        f"(or Flash*/Lunar/Stop/Approach/Clear/Release/Get); decoded={body!r}"
+                        "(or Flashing Red/FlashRed and the like, Lunar/Stop/Approach/Clear/"
+                        f"Release/Get); decoded={body!r}"
                     )
                 return
             packed = signal_m.group(1)
