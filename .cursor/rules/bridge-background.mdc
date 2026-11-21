@@ -1,0 +1,29 @@
+---
+description: Bridge runs as a background service on the Windows mini PC; control it with bridge.cmd
+alwaysApply: true
+---
+
+# Windows MQTT bridge process
+
+The live bridge (`serial_to_mqtt.py`) is **operator-owned**. On the Windows mini PC it runs in the
+**background**: the `LcosBridge` scheduled task starts `scripts/windows/bridge_runner.py` at boot (no login
+needed). The runner timestamps all output into `logs/bridge.log` and restarts the bridge if it exits.
+At logon, `start_bridge_tabs.cmd` (in shell:startup; source in `scripts/windows/`) opens a "Bridge log"
+tab (`bridge log`, i.e. tail -f) and an "MQTT sub" tab.
+
+Control: `bridge start | stop | restart | status | log` (`bridge.cmd` in the repo root ->
+`scripts/windows/bridge.ps1`). `bridge install` / `bridge uninstall` (elevated) manage the task.
+
+## Do
+
+- Read `logs/bridge.log` (or `bridge status`) to see what the bridge is doing.
+- For a lab test that needs the COM port: `bridge stop`, run the test, then **`bridge start`** before
+  ending the turn, and confirm with `bridge status`.
+- After firmware/agent changes that need a restart: **ask the user** to run `bridge restart` (or run it
+  yourself if they asked you to).
+
+## Do not
+
+- Run a second bridge (`run_serial_mqtt.cmd`, `start_bridge_detached.py`, ...) while the background one
+  is running: two processes would fight over COM3. `bridge status` warns about a foreground bridge.
+- Leave the bridge stopped after your work, or leave stray test bridges running.
