@@ -1,6 +1,12 @@
 # Copy to .bridgerc (same folder) and edit. .bridgerc is local and not committed.
-# KEY=VALUE, '#' starts a comment.
+# KEY=VALUE, one per line; '#' starts a comment line. Keep comments on their own line:
+# on Linux the systemd service reads this file too, and it does not strip trailing comments.
 
 # Show each line's timestamp in 'bridge log' and 'bridge status' (1/0, true/false, yes/no, on/off).
-# The log file always records them. Override per run with -t / -nt.
+# The log always records them. Override per run with -t / -nt.
 TIMESTAMPS=0
+
+# Linux service only (scripts/linux/bridge.sh). Defaults shown.
+# SERIAL_PORT=/dev/lcos-nano
+# BROKER=127.0.0.1
+# BRIDGE_ARGS=--verbose

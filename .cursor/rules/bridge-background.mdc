@@ -1,9 +1,17 @@
 ---
-description: Bridge runs as a background service on the Windows mini PC; control it with bridge.cmd
+description: Bridge runs as a background service (systemd on the layout Pi, a scheduled task on Windows); control it with bridge
 alwaysApply: true
 ---
 
-# Windows MQTT bridge process
+# Bridge process
+
+## Linux (layout Pi)
+
+The `lcos-bridge` systemd service runs `serial_to_mqtt.py` at boot and restarts it 10 s after any exit.
+Log: `journalctl -u lcos-bridge` (or `./bridge log`). Control: `./bridge start | stop | restart | status | log`
+(`scripts/linux/bridge.sh`); `./bridge flash` stops it, uploads the firmware, and starts it again. Port `/dev/lcos-nano`.
+
+## Windows
 
 The live bridge (`serial_to_mqtt.py`) is **operator-owned**. On the Windows mini PC it runs in the
 **background**: the `LcosBridge` scheduled task starts `scripts/windows/bridge_runner.py` at boot (no login
@@ -25,5 +33,5 @@ Control: `bridge start | stop | restart | status | log` (`bridge.cmd` in the rep
 ## Do not
 
 - Run a second bridge (`run_serial_mqtt.cmd`, `start_bridge_detached.py`, ...) while the background one
-  is running: two processes would fight over COM3. `bridge status` warns about a foreground bridge.
+  is running: two processes would fight over the serial port. `bridge status` warns about a foreground bridge.
 - Leave the bridge stopped after your work, or leave stray test bridges running.
