@@ -7,14 +7,16 @@
     bridge status    show PIDs and the last log lines
     bridge log       follow logs\bridge.log (like tail -f; Ctrl+C stops the tail, not the bridge)
     bridge log -t    same, with each line's timestamp (-Timestamps; also works with status)
+    bridge log -nt   same, without timestamps (-NoTimestamps)
     bridge install   register the LcosBridge task (starts at boot, no login needed). Run elevated.
     bridge uninstall remove the task
 
   The bridge runs via scripts\windows\bridge_runner.py, which timestamps output into
   logs\bridge.log and restarts the bridge if it exits. The file always keeps the timestamps;
-  log/status hide them unless -Timestamps is given.
+  log/status show them per the TIMESTAMPS preference in .bridgerc (repo root; see
+  .bridgerc.example). -t / -nt on the command line overrides it.
 #>
-param([Parameter(Position = 0)][string]$Cmd = 'status', [int]$Lines = 50, [switch]$Timestamps)
+param([Parameter(Position = 0)][string]$Cmd = 'status', [int]$Lines = 50, [Alias('t')][switch]$Timestamps, [Alias('nt')][switch]$NoTimestamps)
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -22,6 +24,23 @@ $Root   = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Runner = Join-Path $PSScriptRoot 'bridge_runner.py'
 $Log    = Join-Path $Root 'logs\bridge.log'
 $Task   = 'LcosBridge'
+$Rc     = Join-Path $Root '.bridgerc'
+
+# Preferences: KEY=VALUE lines in .bridgerc, '#' starts a comment.
+function Get-Pref([string]$Name, [string]$Default) {
+    if (Test-Path $Rc) {
+        foreach ($l in Get-Content $Rc) {
+            if ($l -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$' -and $Matches[1] -eq $Name) {
+                return ($Matches[2] -replace '\s+#.*$', '').Trim('"', "'")
+            }
+        }
+    }
+    return $Default
+}
+if ($NoTimestamps) { $Timestamps = $false }
+elseif (-not $Timestamps) {
+    $Timestamps = [bool]((Get-Pref 'TIMESTAMPS' '0') -match '^(1|true|yes|on)$')
+}
 
 # Lines in the file start with 'yyyy-MM-dd HH:mm:ss '; drop that unless -Timestamps.
 function Format-LogLine {

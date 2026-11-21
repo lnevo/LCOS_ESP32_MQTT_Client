@@ -1,0 +1,6 @@
+# Copy to .bridgerc (same folder) and edit. .bridgerc is local and not committed.
+# KEY=VALUE, '#' starts a comment.
+
+# Show each line's timestamp in 'bridge log' and 'bridge status' (1/0, true/false, yes/no, on/off).
+# The log file always records them. Override per run with -t / -nt.
+TIMESTAMPS=0
