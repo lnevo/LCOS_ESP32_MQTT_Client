@@ -22,16 +22,16 @@ UNIT=lcos-bridge
 UNIT_DST=/etc/systemd/system/$UNIT.service
 RULE_DST=/etc/udev/rules.d/99-lcos-nano.rules
 RC="$ROOT/.bridgerc"
-FQBN=arduino:avr:nano
 
-# pref NAME DEFAULT: value of NAME from .bridgerc, else DEFAULT.
+# pref NAME DEFAULT: value of NAME from .bridgerc, else DEFAULT. Same rules as the
+# systemd EnvironmentFile: the last line wins and the whole rest of the line is the
+# value (no trailing comments), with surrounding quotes removed.
 pref() {
   local name=$1 default=$2 line value
   if [[ -f $RC ]]; then
     line=$(grep -E "^[[:space:]]*${name}[[:space:]]*=" "$RC" | tail -n 1 || true)
     if [[ -n $line ]]; then
       value=${line#*=}
-      value=${value%%#*}
       value=$(printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e "s/^[\"']//" -e "s/[\"']\$//")
       printf '%s' "$value"
       return
@@ -41,11 +41,15 @@ pref() {
 }
 
 SERIAL_PORT=$(pref SERIAL_PORT /dev/lcos-nano)
+# The bridge Nano flashes with the new bootloader (arduino:avr:nano). An old-bootloader
+# Nano needs FQBN=arduino:avr:nano:cpu=atmega328old in .bridgerc.
+FQBN=$(pref FQBN arduino:avr:nano)
 
 CMD=${1:-status}
 shift || true
 
 TS=$(pref TIMESTAMPS 0)
+TS=$(printf "%s" "$TS" | tr "[:upper:]" "[:lower:]")
 [[ $TS =~ ^(1|true|yes|on)$ ]] && TS=1 || TS=0
 for a in "$@"; do
   case $a in
@@ -98,27 +102,30 @@ arduino_cli() {
   "$cli" "$@"
 }
 
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/lcos-bridge"
+BUILD="$CACHE/build"
+
 # The sketch folder must be named after the .ino (lcos-bridge); build from a copy if not.
+# The copy lives in one fixed cache folder, refreshed on each build.
 sketch_dir() {
   if [[ $(basename "$ROOT") == lcos-bridge ]]; then
     printf '%s' "$ROOT"
     return
   fi
-  local tmp
-  tmp=$(mktemp -d)/lcos-bridge
-  mkdir -p "$tmp"
-  cp "$ROOT"/*.ino "$ROOT"/*.cpp "$ROOT"/*.h "$tmp"/
-  ln -s "$ROOT/lcos" "$tmp/lcos"
-  printf '%s' "$tmp"
+  local dir="$CACHE/sketch/lcos-bridge"
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  cp "$ROOT"/*.ino "$ROOT"/*.cpp "$ROOT"/*.h "$dir"/
+  ln -s "$ROOT/lcos" "$dir/lcos"
+  printf '%s' "$dir"
 }
 
-# compile [arduino-cli compile args...]: build into $BUILD (kept for upload).
-BUILD="${XDG_CACHE_HOME:-$HOME/.cache}/lcos-bridge-build"
+# Build into $BUILD, which upload reads.
 compile() {
   local dir
   dir=$(sketch_dir)
   mkdir -p "$BUILD"
-  arduino_cli compile --no-color -b $FQBN --output-dir "$BUILD" \
+  arduino_cli compile --no-color -b "$FQBN" --output-dir "$BUILD" \
     --library "$ROOT/lcos" --library "$ROOT/lcos/nRF24-master" --library "$ROOT/lcos/nRF24Network-master" \
     "$dir"
 }
@@ -137,19 +144,26 @@ flash() {
     sudo systemctl stop $UNIT
   fi
   local rc=0
-  arduino_cli upload --no-color -b $FQBN -p "$port" --input-dir "$BUILD" || rc=$?
+  arduino_cli upload --no-color -b "$FQBN" -p "$port" --input-dir "$BUILD" || rc=$?
   if [[ $was_active == 1 ]]; then sudo systemctl start $UNIT; fi
   if [[ $rc == 0 ]]; then echo FLASH_OK; else echo FLASH_FAIL; fi
   return $rc
 }
 
 install_unit() {
-  local user
-  user=$(id -un)
+  # Under sudo, run the service as the calling user, never root.
+  local user=${SUDO_USER:-$(id -un)}
+  if [[ $user == root ]]; then
+    echo "refusing to install a service that runs as root; run as the normal user" >&2
+    exit 1
+  fi
+  # Escape the path for the sed replacement text (\\, & and the | delimiter).
+  local repo
+  repo=$(printf '%s' "$ROOT" | sed -e 's/[\\&|]/\\&/g')
   sudo install -m 0644 "$HERE/99-lcos-nano.rules" "$RULE_DST"
   sudo udevadm control --reload-rules
   sudo udevadm trigger --subsystem-match=tty
-  sed -e "s#@REPO@#$ROOT#g" -e "s#@USER@#$user#g" "$HERE/lcos-bridge.service" | sudo tee "$UNIT_DST" >/dev/null
+  sed -e "s|@REPO@|$repo|g" -e "s|@USER@|$user|g" "$HERE/lcos-bridge.service" | sudo tee "$UNIT_DST" >/dev/null
   sudo systemctl daemon-reload
   sudo systemctl enable $UNIT
   echo "installed $UNIT_DST and $RULE_DST (enabled at boot; not started: run '$0 start')"
@@ -173,6 +187,6 @@ case $CMD in
   flash)     flash ;;
   install)   install_unit ;;
   uninstall) uninstall_unit ;;
-  -h|--help|help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' ;;
+  -h|--help|help) sed -n '2,/^[^#]/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' ;;
   *)         echo "unknown command: $CMD (try: $0 help)" >&2; exit 2 ;;
 esac

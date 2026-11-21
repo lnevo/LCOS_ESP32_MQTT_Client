@@ -37,12 +37,17 @@ class LinuxServiceTest(unittest.TestCase):
         self.assertIn(f"Environment=SERIAL_PORT=/dev/{link}", self.unit)
         self.assertIn(f"pref SERIAL_PORT /dev/{link}", self.script)
 
+    def test_install_never_runs_as_root(self) -> None:
+        self.assertIn("SUDO_USER", self.script)
+
     def test_rule_matches_ch340(self) -> None:
         self.assertIn('ATTRS{idVendor}=="1a86"', self.rule)
         self.assertIn('ATTRS{idProduct}=="7523"', self.rule)
 
     def test_root_link_points_at_script(self) -> None:
         link = ROOT / "bridge"
+        if not link.is_symlink():
+            self.skipTest("checkout without symlinks (Windows core.symlinks=false)")
         self.assertTrue(link.is_symlink())
         self.assertEqual(link.resolve(), (LINUX / "bridge.sh").resolve())
 

@@ -10,3 +10,4 @@ TIMESTAMPS=0
 # SERIAL_PORT=/dev/lcos-nano
 # BROKER=127.0.0.1
 # BRIDGE_ARGS=--verbose
+# FQBN=arduino:avr:nano   (old-bootloader Nano: arduino:avr:nano:cpu=atmega328old)

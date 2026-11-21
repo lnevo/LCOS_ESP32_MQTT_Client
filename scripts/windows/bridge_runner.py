@@ -5,8 +5,10 @@ Started by bridge.ps1 (the LcosBridge scheduled task at boot, or `bridge start`)
 Each line gets a timestamp. If the bridge exits (COM port not ready yet, crash),
 it is restarted after RESTART_DELAY seconds. Stop it with `bridge stop`.
 
-Extra arguments are passed to serial_to_mqtt.py; with none, the defaults below
-match `run_serial_mqtt.cmd verbose`.
+Extra arguments are passed to serial_to_mqtt.py; with none, DEFAULT_ARGS below
+(COM3, the layout Pi broker 10.0.0.150, --verbose). The task passes no arguments, so a
+different COM port means editing DEFAULT_ARGS. The layout Pi runs the Linux service
+instead (scripts/linux/bridge.sh), which reads .bridgerc.
 """
 
 from __future__ import annotations

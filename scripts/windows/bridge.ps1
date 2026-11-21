@@ -136,6 +136,6 @@ switch ($Cmd.ToLower()) {
     'log'       { Follow-Log }
     'tail'      { Follow-Log }
     'install'   { Install-Task }
-    'uninstall' { Unregister-ScheduledTask -TaskName $Task -Confirm:$false; "task $Task removed" }
+    'uninstall' { Stop-Bridge; Unregister-ScheduledTask -TaskName $Task -Confirm:$false; "task $Task removed" }
     default     { Get-Help $PSCommandPath -Detailed | Out-String | Write-Output; exit 2 }
 }
