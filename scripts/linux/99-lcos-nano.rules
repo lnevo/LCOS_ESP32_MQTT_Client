@@ -1,0 +1,6 @@
+# Stable name /dev/lcos-nano for the bridge Nano (CH340 USB serial, 1a86:7523).
+# Installed by `./bridge install` into /etc/udev/rules.d/.
+# CH340 chips carry no serial number, so this matches the first CH340 on the host.
+# If a second CH340 is ever plugged into the same host, add KERNELS=="<usb path>"
+# (from `udevadm info -a -n /dev/ttyUSB0`) so the name stays on the bridge Nano.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="lcos-nano", GROUP="dialout", MODE="0660"

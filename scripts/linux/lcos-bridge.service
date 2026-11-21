@@ -1,0 +1,29 @@
+# LCOS serial <-> MQTT bridge as a systemd service (Linux host, e.g. the layout Pi).
+# Installed by `./bridge install`, which fills in @REPO@ and @USER@ and copies this
+# file to /etc/systemd/system/lcos-bridge.service. Settings come from .bridgerc.
+[Unit]
+Description=LCOS serial<->MQTT bridge (serial_to_mqtt.py)
+Wants=network-online.target
+After=network-online.target mosquitto.service
+# Never give up: the Nano may be unplugged for a while.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@USER@
+SupplementaryGroups=dialout
+WorkingDirectory=@REPO@
+Environment=SERIAL_PORT=/dev/lcos-nano
+Environment=BROKER=127.0.0.1
+Environment=BRIDGE_ARGS=--verbose
+EnvironmentFile=-@REPO@/.bridgerc
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/sh -c 'exec /usr/bin/python3 -u serial_to_mqtt.py --com "$SERIAL_PORT" --broker "$BROKER" $BRIDGE_ARGS'
+# serial_to_mqtt.py exits 1 when the port is missing or drops; try again.
+Restart=always
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

@@ -17,3 +17,8 @@ venv/
 
 # Office lock files (Excel etc.)
 ~$*
+
+# Background bridge log (bridge_runner.py)
+logs/
+# Local bridge preferences (bridge.ps1)
+.bridgerc

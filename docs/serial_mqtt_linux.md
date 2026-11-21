@@ -103,6 +103,44 @@ mosquitto_pub -h <broker_host> -p 1883 -t track/bridge/heartbeat -m PING
 
 Use the same host/port as `--broker` / `--mqtt-port` on the script.
 
+## 6. Run it as a service (layout Pi)
+
+On a host that runs the bridge all the time, use the systemd service instead of a terminal. Clone the repo into a folder named `lcos-bridge` (the sketch folder must match `lcos-bridge.ino`), then:
+
+```bash
+sudo apt install python3-serial python3-paho-mqtt
+./bridge install      # udev rule /dev/lcos-nano + lcos-bridge.service, enabled at boot (sudo)
+./bridge start
+./bridge status       # state, port, last log lines
+./bridge log          # follow the log; Ctrl+C stops the tail only (-t adds timestamps)
+./bridge stop | restart | uninstall
+```
+
+`./bridge` links to `scripts/linux/bridge.sh`. The service runs `serial_to_mqtt.py --com $SERIAL_PORT --broker $BROKER $BRIDGE_ARGS` as your user, restarts it 10 s after any exit (Nano unplugged, USB drop), and logs to the journal (`journalctl -u lcos-bridge`). Defaults: `/dev/lcos-nano`, `127.0.0.1` (Mosquitto on the same host), `--verbose`; override them in `.bridgerc` (see `.bridgerc.example`).
+
+`/dev/lcos-nano` is a udev symlink to the first CH340 (USB id `1a86:7523`). CH340 chips have no serial number; if a second one is ever plugged into the same host, pin the rule to a USB port (see the comment in `scripts/linux/99-lcos-nano.rules`).
+
+For a lab test that needs the port: `./bridge stop`, run the test, `./bridge start`.
+
+## 7. Flash the Nano from Linux (no Arduino IDE)
+
+Install `arduino-cli` and the AVR core once. Pick the build that matches the **userland**, not the kernel: Raspberry Pi OS 32-bit (`dpkg --print-architecture` says `armhf`) needs the ARMv7 build even on a 64-bit kernel, or the AVR compiler it downloads will not start (`required file not found`).
+
+```bash
+mkdir -p ~/.local/bin
+curl -fsSL -o /tmp/acli.tgz https://downloads.arduino.cc/arduino-cli/arduino-cli_latest_Linux_ARMv7.tar.gz   # armhf; use _ARM64 / _64bit to match
+tar -xzf /tmp/acli.tgz -C ~/.local/bin arduino-cli
+~/.local/bin/arduino-cli core update-index
+~/.local/bin/arduino-cli core install arduino:avr
+```
+
+Then:
+
+```bash
+./bridge compile   # arduino:avr:nano with the vendored lcos/ RF24 libraries; no upload
+./bridge flash     # compile, stop the bridge, upload to /dev/lcos-nano, start the bridge
+```
+
 ## macOS
 
 Same flow: use `python3`, **`source .venv/bin/activate`**, and a device path such as `/dev/tty.usbserial-*` or `/dev/cu.usbserial-*` for `--com` / `SERIAL_PORT`.
