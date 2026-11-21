@@ -6,13 +6,15 @@
     bridge restart   stop, then start
     bridge status    show PIDs and the last log lines
     bridge log       follow logs\bridge.log (like tail -f; Ctrl+C stops the tail, not the bridge)
+    bridge log -t    same, with each line's timestamp (-Timestamps; also works with status)
     bridge install   register the LcosBridge task (starts at boot, no login needed). Run elevated.
     bridge uninstall remove the task
 
   The bridge runs via scripts\windows\bridge_runner.py, which timestamps output into
-  logs\bridge.log and restarts the bridge if it exits.
+  logs\bridge.log and restarts the bridge if it exits. The file always keeps the timestamps;
+  log/status hide them unless -Timestamps is given.
 #>
-param([Parameter(Position = 0)][string]$Cmd = 'status', [int]$Lines = 50)
+param([Parameter(Position = 0)][string]$Cmd = 'status', [int]$Lines = 50, [switch]$Timestamps)
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -20,6 +22,11 @@ $Root   = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Runner = Join-Path $PSScriptRoot 'bridge_runner.py'
 $Log    = Join-Path $Root 'logs\bridge.log'
 $Task   = 'LcosBridge'
+
+# Lines in the file start with 'yyyy-MM-dd HH:mm:ss '; drop that unless -Timestamps.
+function Format-LogLine {
+    process { if ($Timestamps) { $_ } else { $_ -replace '^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d ', '' } }
+}
 
 function Get-Python {
     foreach ($p in @("$env:LOCALAPPDATA\Programs\Python\Python312\python.exe")) { if (Test-Path $p) { return $p } }
@@ -48,7 +55,7 @@ function Show-Status {
     }
     $t = Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue
     if ($t) { "task $Task`: $($t.State)" } else { "task $Task`: not installed" }
-    if (Test-Path $Log) { "--- $Log (last 10)"; Get-Content $Log -Tail 10 -Encoding UTF8 }
+    if (Test-Path $Log) { "--- $Log (last 10)"; Get-Content $Log -Tail 10 -Encoding UTF8 | Format-LogLine }
 }
 
 function Start-Bridge {
@@ -84,7 +91,7 @@ function Follow-Log {
     if (-not (Test-Path $Log)) { New-Item -ItemType Directory -Force (Split-Path $Log) | Out-Null; New-Item -ItemType File $Log | Out-Null }
     $Host.UI.RawUI.WindowTitle = 'Bridge log'
     "following $Log  (Ctrl+C stops the tail; the bridge keeps running)"
-    Get-Content -Path $Log -Tail $Lines -Wait -Encoding UTF8
+    Get-Content -Path $Log -Tail $Lines -Wait -Encoding UTF8 | Format-LogLine
 }
 
 function Install-Task {
